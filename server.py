@@ -752,23 +752,48 @@ _WIN_EPOCH = 116444736000000000  # 1601-01-01 → 1970-01-01（100ns 单位）
 
 
 def _win_parse_creation(created):
-    """CIM CreationDate (ISO 或 WMI DMTF 格式) → 创建时间戳秒；失败返回 None。"""
+    """CIM CreationDate → 创建时间戳秒；失败返回 None。
+
+    实测来源格式：Windows PowerShell 5.1 的 ConvertTo-Json 把 DateTime
+    序列化为 "/Date(<epoch-ms>)/"（JSON 文本里写作 \/Date(...)\/）；
+    PowerShell 7 输出 ISO 8601；裸 WMI/DMTF 为
+    "YYYYMMDDhhmmss[.ffffff][±mmmm]"，时区后缀单位是分钟（+480 即 UTC+8）。"""
     if not created:
         return None
-    text = str(created)
-    try:
-        if text.endswith("+000") or "T" in text:
-            from datetime import datetime
+    text = str(created).strip()
+    from datetime import datetime, timedelta, timezone
+
+    m = re.fullmatch(r"\\?/Date\((-?\d+)(?:[+-]\d{3,4})?\)\\?/", text)
+    if m:
+        try:
+            return int(m.group(1)) / 1000.0
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    if "T" in text:
+        try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             return parsed.timestamp()
-        m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\..*)?",
-                         text)
-        if m:
-            from datetime import datetime
-            return datetime(*[int(g) for g in m.groups()[:6]]).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})"
+                     r"(?:\.(\d{1,7}))?(?:([+-])(\d{1,4}))?", text)
+    if not m:
+        return None
+    try:
+        parts = [int(g) for g in m.groups()[:6]]
+        micro = int((m.group(7) or "").ljust(6, "0")[:6] or 0)
+        bias = 0
+        if m.group(8) and m.group(9):
+            bias = int(m.group(9))
+            if m.group(8) == "-":
+                bias = -bias
+        aware = datetime(*parts, micro,
+                         tzinfo=timezone(timedelta(minutes=bias)))
+        return aware.timestamp()
     except (TypeError, ValueError, OverflowError):
-        pass
-    return None
+        return None
 
 
 def _win_etime(created):

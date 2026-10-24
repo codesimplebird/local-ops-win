@@ -67,12 +67,37 @@ class WindowsParsingTests(unittest.TestCase):
                          '"say ""hi"""')
 
     def test_win_parse_creation(self):
-        dmtf = server._win_parse_creation("20250401090000.123456+480")
-        self.assertIsNotNone(dmtf)
-        iso = server._win_parse_creation("2025-04-01T09:00:00Z")
-        self.assertIsNotNone(iso)
+        from datetime import datetime, timedelta, timezone
+        # PS 5.1 ConvertTo-Json 的实际输出（epoch 毫秒，JSON 转义 \/）
+        self.assertAlmostEqual(
+            server._win_parse_creation("/Date(1743498000123)/"),
+            1743498000.123, places=3)
+        self.assertAlmostEqual(
+            server._win_parse_creation("\\/Date(1743498000123)\\/"),
+            1743498000.123, places=3)
+        # ISO 8601（PS 7 / 显式字符串）
+        expected_utc = datetime(2025, 4, 1, 9, 0, 0,
+                                tzinfo=timezone.utc).timestamp()
+        self.assertAlmostEqual(
+            server._win_parse_creation("2025-04-01T09:00:00Z"),
+            expected_utc, places=3)
+        self.assertAlmostEqual(
+            server._win_parse_creation("2025-04-01T17:00:00+08:00"),
+            expected_utc, places=3)
+        # DMTF：时区后缀单位是分钟（+480 = UTC+8），不得依赖本机时区
+        expected_cn = datetime(
+            2025, 4, 1, 9, 0, 0,
+            tzinfo=timezone(timedelta(minutes=480))).timestamp()
+        self.assertAlmostEqual(
+            server._win_parse_creation("20250401090000.123456+480"),
+            expected_cn + 0.123456, places=3)
+        self.assertAlmostEqual(
+            server._win_parse_creation("20250401090000+000"),
+            expected_utc, places=3)
         self.assertIsNone(server._win_parse_creation(""))
+        self.assertIsNone(server._win_parse_creation(None))
         self.assertIsNone(server._win_parse_creation("garbage"))
+        self.assertIsNone(server._win_parse_creation("\\/Date(abc)\\/"))
 
     def test_win_tree_of_with_cycle(self):
         table = {
