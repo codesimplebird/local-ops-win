@@ -12,6 +12,7 @@ API 契约与实现要点见 AGENTS.md。
 import glob
 import functools
 import errno
+import io
 import json
 import logging
 import os
@@ -4589,6 +4590,13 @@ def redirect_console_output():
     """在运行目录迁移完成后，将 .app 输出安全追加到 Library Logs。"""
     path = os.path.join(LOGS_DIR, "console.log")
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    if fd < 3:
+        # 标准句柄缺失（pythonw、隐藏窗口等）时 os.open 会占用 0-2 之一；
+        # 若直接 dup2(fd, fd) 是自别名空操作，finally 的 os.close(fd) 会把
+        # 标准句柄本身关掉，之后所有输出都报 OSError 9。dup 两次腾挪到高位。
+        moved = os.dup(fd)
+        fd = os.dup(moved)
+        os.close(moved)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
@@ -4600,15 +4608,30 @@ def redirect_console_output():
         if IS_WIN:
             # 重定向后 fd 仍是 CRT 文本模式，会与 TextIOWrapper 的
             # 换行翻译叠加成 \r\r\n；切二进制模式只留一层翻译。
+            # pythonw/隐藏窗口等场景标准句柄可能无效（OSError 9），
+            # 跳过即可：dup2 会把日志文件挂到 1/2 上。
             import msvcrt
             msvcrt.setmode(fd, os.O_BINARY)
-            msvcrt.setmode(1, os.O_BINARY)
-            msvcrt.setmode(2, os.O_BINARY)
+            for std_fd in (1, 2):
+                try:
+                    msvcrt.setmode(std_fd, os.O_BINARY)
+                except OSError:
+                    pass
         os.dup2(fd, 1)
         os.dup2(fd, 2)
     finally:
         os.close(fd)
-    for stream in (sys.stdout, sys.stderr):
+    for name, std_fd in (("stdout", 1), ("stderr", 2)):
+        stream = getattr(sys, name)
+        if stream is None:
+            # pythonw 等无控制台启动：重建指向重定向后 fd 的输出流。
+            try:
+                setattr(sys, name, io.TextIOWrapper(
+                    io.FileIO(std_fd, "a", closefd=False),
+                    encoding="utf-8", errors="replace", write_through=True))
+                stream = getattr(sys, name)
+            except (OSError, ValueError):
+                continue
         try:
             stream.reconfigure(line_buffering=True)
         except (AttributeError, OSError):

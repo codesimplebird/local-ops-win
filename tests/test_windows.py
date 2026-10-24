@@ -198,6 +198,32 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertEqual(env["PATH"], "C:\\bin")
         self.assertEqual(env[server.RUN_TOKEN_ENV], "win-secret")
 
+    def test_redirect_console_output_with_closed_std_handles(self):
+        """pythonw/隐藏窗口启动时 fd 1/2 可能无效：重定向不得崩溃，
+        且后续输出必须落到 console.log（回归 --launcher OSError 9）。"""
+        logs = tempfile.mkdtemp(prefix="console-logs-")
+        saved_logs_dir = server.LOGS_DIR
+        saved_fds = (os.dup(1), os.dup(2))
+        try:
+            server.LOGS_DIR = logs
+            os.close(1)
+            os.close(2)
+            server.redirect_console_output()
+            print("probe-stdout")
+            sys.stderr.write("probe-stderr\n")
+            sys.stderr.flush()
+        finally:
+            os.dup2(saved_fds[0], 1)
+            os.dup2(saved_fds[1], 2)
+            os.close(saved_fds[0])
+            os.close(saved_fds[1])
+            server.LOGS_DIR = saved_logs_dir
+        with open(os.path.join(logs, "console.log"),
+                  encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        self.assertIn("probe-stdout", text)
+        self.assertIn("probe-stderr", text)
+
 
 if __name__ == "__main__":
     unittest.main()
