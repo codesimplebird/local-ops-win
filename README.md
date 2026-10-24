@@ -6,20 +6,16 @@
 
 总控台是一个面向本地的服务与批处理任务快速启动、运行监测工具。它把常用项目命令、长期服务和一次性批处理任务集中到本地网页中，并用 Python 3 标准库提供只绑定回环地址的后端；前端是无构建、无 CDN 的原生 HTML/CSS/JavaScript。
 
-> 当前版本仍处于 Preview / Alpha 阶段，以源码预览形式提供。接口、配置格式和安装方式仍可能调整；`总控台.app` 目前不是可单独复制的自包含应用，也尚不代表经过签名、公证的最终 macOS 发行版。
+> 总控台只服务当前 Mac 和当前用户，不是远程运维、多人协作或公网管理面板。它能以当前用户权限执行你保存的命令，请勿通过反向代理、SSH 隧道或端口映射暴露到不受信任的网络。当前仍为 Preview / Alpha 阶段，接口、配置格式和安装方式可能调整；`总控台.app` 是项目内启动器，不是可单独复制的自包含应用。
 
-总控台只服务当前 Mac 和当前用户，不是远程运维、多人协作或公网管理面板。它能够以当前用户权限执行保存的 shell 命令；不要将监听地址、反向代理、SSH 隧道或端口映射暴露到不受信任的网络。
+**📚 文档**：[使用手册](https://github.com/laogou717/local-ops/wiki/使用手册) · [数据与备份](https://github.com/laogou717/local-ops/wiki/数据与备份) · [故障排查](https://github.com/laogou717/local-ops/wiki/故障排查) · [开发者与发布指南](https://github.com/laogou717/local-ops/wiki/开发者与发布指南) · [Wiki 主页](https://github.com/laogou717/local-ops/wiki)
 
-## 功能
+## 亮点
 
-- 每 2 秒查看当前用户的本地监听服务、CPU、内存和运行时长。
-- 保存常用服务或批处理任务，集中启动、停止、重启、查日志和诊断。
-- 在当前页面会话中发现新出现的、尚未管理的监听端口，可直接加入启动台或忽略隐藏。
-- 运行前检查工作目录、脚本和运行时；明确失效时直接给出修复入口，不必先失败一次。
-- 从项目文件夹识别常用启动命令，但不安装依赖、不执行项目代码。
-- 通过运行 token、进程组和当前 UID 联合识别受控进程，不会因端口相同就杀死外部进程。
-- Ops 指挥台单一主题：深空蓝黑/雾灰双色，左侧导航轨、KPI 概览卡、实时动态侧栏，浅色、深色和跟随系统。
-- 全局命令面板可直接添加服务或批处理任务；启动台卡片支持鼠标拖拽和键盘排序。
+- 每 2 秒查看当前用户本地监听服务的 CPU、内存、运行时长与**启动者溯源**（Codex/Claude 等 AI 助手、VS Code/Cursor 等编辑器、终端或总控台）。
+- 保存常用服务与批处理任务，集中启动、停止、重启、查日志与诊断；运行 token + 进程组 + UID 三重校验，不会因端口相同就杀掉外部进程。
+- 选择工作区文件夹后只读识别项目启动命令（Node/pnpm、Hexo、Django/FastAPI、Go、Rust、静态站点等），不安装依赖、不执行项目代码。
+- 新端口发现与一键加入启动台、全局命令面板 ⌘K、日志中心 ⌘J、Ops 指挥台单一主题（浅色/深色/跟随系统）、拖拽与键盘排序。
 
 ## 界面预览
 
@@ -29,60 +25,25 @@
 | --- | --- |
 | ![Ops 指挥台 · 启动台](docs/screenshots/ops-launchpad.jpg) | ![Ops 指挥台 · 服务监控](docs/screenshots/ops-services.jpg) |
 
-## 系统要求
+## 快速开始
 
 - **macOS 12 或更高版本**，或 **Windows 10/11（64 位）**。
-- Python 3.12。运行时仅使用 Python 标准库。
+- Python 3.12。运行时仅使用 Python 标准库，无需安装任何第三方包。
 - macOS 自带的 `ps`、`lsof`、`osascript` 等系统工具；Windows 自带的
   `netstat`、`taskkill`、`powershell`（PowerShell 5.1 已内置）。
 - Safari、Chrome、Edge 或其他支持 ES Modules 的现代浏览器。
 
-`VERSION` 是项目版本的唯一权威来源。`Info.plist`、发行包名和发行说明应与它保持一致。
-
-## 安装
-
-总控台以完整项目目录运行，`总控台.app` 是项目内启动器，不是可以单独复制的自包含应用。
-
-1. **下载并解压**：将发行 zip 解压到一个你有读写权限的位置（如 `~/Applications` 或文稿下的固定目录）。解压后请保持目录结构完整，不要单独移动 `总控台.app`。
-2. **确认 Python 3.12**：在「终端」运行：
-
-   ```bash
-   python3 --version
-   ```
-
-   显示 3.12 或更高即可。未安装或版本过低时，到 <https://www.python.org/downloads/> 下载官方 macOS 安装包，按向导安装一次即可（之后不再需要操作）。
-3. **首次打开（未签名应用，二选一）**：
-   - 图形方式：在 `总控台.app` 上**点右键 → 打开**，在弹窗中再点「打开」。只需做一次。
-   - 命令行方式（等价，适合批量或远程）：
-
-     ```bash
-     xattr -dr com.apple.quarantine "总控台.app"
-     ```
-
-     之后即可正常双击。这是 macOS 对互联网下载应用的常规隔离提示，不是程序损坏。
-
-## 运行
-
-启动总控台有且只有三种方式，效果相同，按习惯选择：
+启动方式有三种，效果相同，按习惯选择：
 
 | 方式 | 操作 | 适用场景 |
 | --- | --- | --- |
 | 双击应用 | 双击 `总控台.app` | macOS 日常使用。后台运行，无 Terminal 窗口和 Dock 图标 |
 | 双击脚本 | 双击 `start.command`（macOS）/ `start.bat`（Windows） | 想在终端窗口里看实时输出 |
-| 命令行 | `python3 server.py`（macOS）/ `py -3 server.py`（Windows） | 调试、脚本化或远程启动 |
+| 命令行 | `python3 server.py`（macOS）/ `py -3 server.py`（Windows），均可用 `[--no-browser] [--preferred-port 9603]` | 调试、脚本化或远程启动 |
 
-命令行还有两个可选参数：
+首次打开互联网下载的 `总控台.app`，右键 → 打开（点「打开」），或执行 `xattr -dr com.apple.quarantine "总控台.app"`，只需一次。这是 macOS 对互联网下载应用的常规隔离提示，不是程序损坏；解压后请保持目录结构完整，不要单独移动 `总控台.app`。
 
-```bash
-python3 server.py --no-browser        # 只启动服务，不自动打开浏览器
-python3 server.py --preferred-port 9603  # 在 9600-9609 内指定优先端口
-```
-
-启动后程序只绑定 `127.0.0.1`，从 9600 起尝试端口，被占用则递增（最多 10 个），并自动打开浏览器。命令行参数、环境变量（`CONSOLE_DATA_DIR` / `CONSOLE_LOG_DIR`）见下文“数据、隐私与备份”。
-
-**实际地址在哪里看**：顶栏「重启 :9600」按钮上直接显示当前端口；或看终端输出 / `~/Library/Logs/总控台/console.log`。浏览器手动访问 `http://127.0.0.1:端口号/` 即可。
-
-**停止与重启**：顶栏「重启 / 停止」控制的是总控台自身（网页服务）。停止总控台**不会**停止启动台里已经运行的应用——它们是独立进程组，会继续运行；下次打开总控台时会自动重新识别。重启总控台会加载磁盘上的最新代码，同样不影响运行中的应用。
+启动后自动打开 `http://127.0.0.1:9600`，被占则尝试 9601–9609。实际地址看顶栏「重启 :9600」按钮，或终端输出 / `~/Library/Logs/总控台/console.log`。
 
 ## Windows 适配说明
 
@@ -112,15 +73,15 @@ python3 server.py --preferred-port 9603  # 在 9600-9609 内指定优先端口
 
 ## 使用
 
-打开页面后，左侧是导航轨，右侧是信息栏；所有数据每 2 秒自动刷新。
+左侧导航轨切换「启动台 / 服务监控」，右侧信息栏展示实时动态；所有数据每 2 秒自动刷新，断连时显示横幅提示。
 
-### 启动台（管理你的服务与任务）
+- **启动台**：点「+ 添加服务」选择工作区，自动识别项目并给出候选命令（也可「选择脚本」或手动填写）；卡片大按钮启停（任务是运行/中止），右侧常显复制/日志/诊断/重启/编辑/删除；支持拖拽排序、键盘排序、分区筛选与批量停止。
+- **服务监控**：概览卡 + 服务表格；页面打开期间新出现的未管理监听端口会单独提醒，可「加入启动台」（自动识别项目并原子认领进程）、「忽略并隐藏」或「暂时关闭」。
+- **日志中心（⌘J）/ 设置中心 / 命令面板（⌘K）**：从导航轨或快捷键进入；命令面板支持全局搜索与全键盘操作。
+- 红色按钮会结束进程或删除应用，需要二次确认。顶栏「重启 / 停止」控制的是总控台自身，**不会**停止启动台里已经运行的应用——它们是独立进程组，会继续运行。
+- 选择批处理脚本时，总控台只保存脚本的绝对路径和生成的执行命令，不复制或托管脚本内容；脚本移动、改名或删除后任务会失效。
 
-- **添加服务/任务**：点「+ 添加服务」卡片或页头快捷按钮。选择工作区文件夹后会自动识别项目类型（Node/pnpm、Hexo/Hugo、Django/FastAPI、Go、Rust、静态站点等）并给出候选命令；也可以「选择脚本」或完全手动填写。`service` 是长期服务（带端口语义），`task` 是有明确结束时间的批处理（强制无端口）。
-- **卡片**：大按钮启动/停止（任务是运行/中止）；右侧一排小按钮（复制链接/日志/诊断/重启/编辑/删除）常显，不用悬浮。运行中显示端口与时长；配置失效（目录/脚本丢失）会直接标出原因并禁用启动，点开「启动诊断」有修复建议。
-- **筛选**：每个分区右上角可按 全部/运行中/已停止/异常（任务为 全部/运行中/成功/失败/已取消）过滤，点按即时切换。
-- **排序**：鼠标拖拽，或聚焦卡片后按空格进入键盘排序（方向键移动，空格确认）。
-- **批量停止**：右侧「快捷操作」里可一键停止全部运行中的应用（有确认框，逐个安全停止，绝不按端口杀进程）。
+任务退出码约定：自然退出 `0` = 成功，其他非零 = 失败；脚本内用户主动取消请退出 `130`（显示「已取消」）；总控台按钮主动中止显示为「已中止」。此约定只用于 `task`，长期服务仍按普通退出处理。
 
 ### 服务监控（看这台 Mac 在跑什么）
 
@@ -224,114 +185,48 @@ python3 server.py
 
 程序不会安装系统启动项，卸载时也不会自动删除用户数据。
 
+（上游已将使用细节迁往 [Wiki](https://github.com/laogou717/local-ops/wiki/使用手册)；本仓库为便于离线查阅保留了上述完整章节，内容以上游 Wiki 为准做同步。）
+
 ## 安全边界
 
-总控台不是多用户服务器或远程管理面板。它能以当前 macOS 用户的权限执行你保存的 shell 命令，因此：
+- 只添加你已检查且信任的命令和工作目录；总控台能以当前用户权限执行保存的 shell 命令。
+- 不要将服务绑定到 `0.0.0.0`，不要通过反向代理、SSH 隧道或端口映射对外暴露；不要在共享或不受信任的用户账户中运行。
+- 不要把 `~/Library/Application Support/总控台/config.json`、日志或故障截图未经脱敏就上传。
+- 本地回环绑定只是第一层边界，不能替代写接口的 Host/Origin/控制令牌防护；发布验收必须执行 [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) 中的安全项。
 
-- 只添加你已检查且信任的命令和工作目录。
-- 不要将服务绑定到 `0.0.0.0`，不要通过反向代理、SSH 隧道或端口映射对外暴露。
-- 不要在共享或不受信任的用户账户中运行。
-- 不要把 Application Support 中的 `config.json`、Library Logs 日志或故障截图未经脱敏就上传。
-- 本地回环绑定只是第一层边界，不能替代写接口的 Host/Origin/控制令牌防护。发布验收时必须执行 `RELEASE_CHECKLIST.md` 中的安全项。
+## 维护说明
 
-## 故障排查
+总控台由作者个人维护：功能的新增、修改与完善以作者日常使用中的实际需求为准，迭代节奏不定；PR 不承诺审阅或合入。
 
-### 双击后没有界面
+如果你希望增加功能、修复问题或适配其他平台，欢迎 **Fork 本仓库自行修改**，并在 Discussions 中提交衍生版本说明。经过试用评估后，优秀的衍生版本会收录到下方 [社区衍生版本](#社区衍生版本) 列表推荐给大家；衍生版本由各自作者维护，未经原作者审阅或测试，使用前请自行评估。
 
-- 确认 `python3 --version` 可用且符合要求。
-- 查看 `~/Library/Logs/总控台/console.log`。
-- 用 `python3 server.py` 从终端启动，直接查看错误。
-- 不要单独移动 `总控台.app`；它必须保持在项目根目录。
+## 社区衍生版本
 
-### 9600 打不开
+以下衍生版本由社区贡献者各自维护，未经原作者审阅或测试，收录仅作推荐。提交新衍生版本或更新说明，请前往 Discussions。
 
-程序可能已选择 9601–9609。查看终端输出或 `~/Library/Logs/总控台/console.log` 中的实际地址。服务可访问时，`GET /api/health` 会返回程序版本、配置 schema 和降级原因，且不会执行 `ps/lsof` 扫描。
+| 衍生版本 | 说明 | 出处 |
+| --- | --- | --- |
+| Windows 10/11 适配（双平台运行） | 共享代码 + 平台分支收敛，不新增运行时依赖，含 Windows 专属测试与 CI | PR [#2](https://github.com/laogou717/local-ops/pull/2)（dontpanic1） |
+| Windows 11 安全优先移植（Draft） | Job Objects、签名回执、CREATE_SUSPENDED 等更严格的进程所有权模型，含打包体系 | PR [#3](https://github.com/laogou717/local-ops/pull/3)（songconmaisaix31-design） |
+| Windows 后端 `server_win.py` | 独立 Windows 后端（纯标准库），复用本仓库前端 | PR [#4](https://github.com/laogou717/local-ops/pull/4)（Hexvork） |
+| sysops.py 跨平台抽象层方案 | psutil 唯一新增依赖，macOS 分支零改动，作者已在日常使用 | [Issue #1 提案](https://github.com/laogou717/local-ops/issues/1)（FL411） |
 
-### 应用启动失败
+## 参与贡献
 
-- 先打开该应用的日志和“启动诊断”。
-- 确认工作目录仍然存在、命令可在普通 shell 中运行。
-- 检查启动瞬间配置端口是否正被其他进程占用；不同项目允许保存相同的常见开发端口。
-- Finder 启动的应用不会读取你的 shell 配置；总控台会补入常用 Node/Homebrew 路径，但非标准安装仍可能需要显式绝对路径。
+**推荐路径（不需要等待审阅）**：
 
-### 配置丢失或损坏
+1. Fork 本仓库，自行开发并长期维护自己的版本；
+2. 阅读 [CONTRIBUTING.md](CONTRIBUTING.md)——安全校验不得削弱（回环绑定、当前 UID、run token、进程组）、一个 PR 只解决一个主题、提交前运行 `make check`、不提交个人路径/日志/未脱敏素材；
+3. 在 Discussions 提交衍生版本说明（名称、定位、fork 地址）；
+4. 经试用评估后，收录到上方「社区衍生版本」推荐列表。
 
-停止总控台，保留当前 `config.json`，然后按上文“恢复”流程使用已知良好的 `config.json.bak` 或离线备份。
+Issue 与 PR 同样可以提交，欢迎讨论与参考，但不承诺审阅或合入（见「维护说明」）。行为规范见 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)；安全问题请按 [`SECURITY.md`](SECURITY.md) 私下报告，不要公开披露。
 
-## 开发
+## 更多文档
 
-运行时无第三方 Python 依赖。重新生成品牌图标派生文件或图标库时需要开发依赖：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements-dev.txt
-```
-
-主要目录：
-
-```text
-server.py                 Python 标准库后端
-static/                   原生前端、主题、品牌、图标和字体
-tests/                    后端、前端契约、发布与交付检查
-tools/gen_brand_assets.py 从品牌主图生成 favicon 与 macOS App Icon
-tools/gen_icons.py         由 vendored SVG 生成 icons.js
-tools/check_project.py     统一的只读项目检查
-data/                      旧版运行数据（仅首次迁移源，不进 Git/发行包）
-```
-
-### 检查
-
-提交前的权威命令是：
-
-```bash
-make check
-```
-
-它会检查 Python/JavaScript/Bash/plist/JSON 语法、版本一致性、主题和资源引用、生成的图标是否同步，并显式发现和运行测试。测试数量为 0 时会失败，不会出现“0 tests 也算通过”。
-
-只运行后端测试：
-
-```bash
-make test
-# 等价的显式命令：
-python3 -m unittest discover -s tests -p 'test_*.py' -v
-```
-
-正式发布前还应运行：
-
-```bash
-make release-check
-```
-
-它会额外检查 Git 状态和不应进入发行范围的文件；不会代替 `RELEASE_CHECKLIST.md` 中的人工验收。
-
-### 重新生成资源
-
-```bash
-make generate-icons
-make generate-brand
-make check
-```
-
-`static/icons.js` 是生成文件，不应手工修改。`generate-brand` 以 `static/assets/console-app-icon.png` 为主源，需要 macOS 自带的 `iconutil`。重新生成品牌图标后，只提交预期的差异，并同步更新 `ASSET_PROVENANCE.md` 的 SHA-256。
-
-## 发布
-
-请按 `RELEASE_CHECKLIST.md` 逐项验收。一个可对外交付的版本至少需要：
-
-- 与根目录 MIT 许可证一致的版权信息，以及全部第三方素材和项目图像的来源、许可与授权凭证。
-- 干净、可追溯的 Git commit 和带签名版本 Tag。
-- 通过 `make release-check` 和人工 UI/安全/升级/回滚验收。
-- 不含任何项目内旧 `data/`、用户 Library 数据、日志、绝对路径、token 或缓存的发行包。
-- 针对目标 Mac 的签名、公证、完整性校验、全新安装和回退证据。
-
-## 参与贡献与安全
-
-- 提交代码前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)，并运行 `make check`。
-- 行为规范见 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。
-- 安全问题不要作为普通公开 Issue 披露；报告方式和脱敏要求见 [`SECURITY.md`](SECURITY.md)。
-- 新增或替换字体、图标、插画、纹理等素材时，必须同步更新 [`ASSET_PROVENANCE.md`](ASSET_PROVENANCE.md) 和 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+- [Wiki 主页](https://github.com/laogou717/local-ops/wiki)：[使用手册](https://github.com/laogou717/local-ops/wiki/使用手册) / [数据与备份](https://github.com/laogou717/local-ops/wiki/数据与备份) / [故障排查](https://github.com/laogou717/local-ops/wiki/故障排查) / [开发者与发布指南](https://github.com/laogou717/local-ops/wiki/开发者与发布指南)
+- [`CHANGELOG.md`](CHANGELOG.md) — 变更记录
+- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) — 发布人工验收清单
 
 ## 许可与第三方素材
 

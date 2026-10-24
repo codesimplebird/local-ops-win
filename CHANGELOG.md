@@ -20,6 +20,7 @@
   - `/api/state` 与 `/api/health` 增加 `platform` 字段，前端重启/停止提示按平台显示启动器名。
   - 新增 `tests/test_windows.py`（Windows 专属解析与真实生命周期测试），macOS 专属测试在 Windows 上显式跳过；CI 增加 Windows 检查 job（含真实启动冒烟测试）。
   - 项目检查在 Windows 上跳过 bash/plutil 检查（Info.plist 改用 plistlib 校验），并兼容 node 24 的 `--test` 输出格式。
+- 项目启动识别增加 Poetry 支持；检测到 `poetry.lock` 时，Python Web 项目候选命令使用 `poetry run`（Windows 社区版同步合入，并保留 `python`/`python3` 平台适配与 uv 支持）。
 - 顶栏新增 GitHub 仓库图标按钮，点击在新标签页打开项目源码仓库。
 - 增加用户/开发文档、备份恢复和升级卸载指南。
 - 布局升级为指挥台结构：左侧图标导航轨、启动台与服务监控双视图 KPI 概览卡（含 CPU/内存火花线）、右侧实时动态/实时告警与端口/资源 TOP 5 信息栏、小贴士、页头快捷操作，以及服务/任务分区筛选芯片；服务表格增加 PID、状态列与 CPU 迷你负载条。结构样式集中于 `base.css`。
@@ -39,6 +40,7 @@
 
 ### Changed
 
+- README 精简为「快速开始 / 使用 / 参与贡献」入口，完整的使用手册、数据与备份、故障排查和开发者指南迁往仓库 Wiki。
 - 默认将配置/图标移至 `~/Library/Application Support/总控台`，日志移至 `~/Library/Logs/总控台`。新目标不存在时仅首次复制旧 `data/`，不删除原文件。
 - `config.json.bak` 现保留修改前的上一份良好配置，而不是与主配置相同的副本。
 - 运行目录权限收紧为 `0700`，配置、图标和日志文件为 `0600`。

@@ -752,7 +752,7 @@ _WIN_EPOCH = 116444736000000000  # 1601-01-01 → 1970-01-01（100ns 单位）
 
 
 def _win_parse_creation(created):
-    """CIM CreationDate → 创建时间戳秒；失败返回 None。
+    r"""CIM CreationDate → 创建时间戳秒；失败返回 None。
 
     实测来源格式：Windows PowerShell 5.1 的 ConvertTo-Json 把 DateTime
     序列化为 "/Date(<epoch-ms>)/"（JSON 文本里写作 \/Date(...)\/）；
@@ -2568,11 +2568,21 @@ def detect_project(root):
         note_file("requirements.txt", requirements)
     py_deps = "\n".join(text for text in (pyproject, requirements) if text).lower()
     has_uv = os.path.isfile(os.path.join(root, "uv.lock"))
+    has_poetry = os.path.isfile(os.path.join(root, "poetry.lock"))
     if has_uv:
         note_file("uv.lock")
+    elif has_poetry:
+        note_file("poetry.lock")
     py_base = "python" if IS_WIN else "python3"
-    py_module = "uv run" if has_uv else ("python -m" if IS_WIN else "python3 -m")
-    py_prefix = "uv run python" if has_uv else py_base
+    if has_uv:
+        py_prefix = "uv run python"
+        py_module = "uv run"
+    elif has_poetry:
+        py_prefix = "poetry run python"
+        py_module = "poetry run"
+    else:
+        py_prefix = py_base
+        py_module = py_base + " -m"
     if os.path.isfile(os.path.join(root, "manage.py")):
         note_file("manage.py")
         add(py_prefix + " manage.py runserver", "Django 开发服务器", "manage.py", 8000, 20)
