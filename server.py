@@ -941,14 +941,19 @@ def _win_listener_owners(pids):
 def _win_filter_own_pids(candidates, owners, current_owner):
     """candidates 中属于当前用户的 pid 集合。
 
-    owners 缺失的 pid（所有者未知）不过滤；owners 为 None 或当前用户名
-    缺失时整体不过滤，维持旧行为。
+    owners 缺失的 pid（所有者未知，如查询瞬间已退出）不过滤；
+    owners 为 None 或当前用户名缺失时整体不过滤，维持旧行为。
+    提升权限进程的令牌所有者是 BUILTIN\\Administrators 组而非用户本身
+    （观察者同样提权时可读到），单用户本机语义下视同当前用户。
     """
     if owners is None or not current_owner[1]:
         return set(candidates)
     domain, user = current_owner
+    elevated_self = ("BUILTIN", "Administrators")
     return {pid for pid in candidates
-            if pid not in owners or owners[pid] == (domain, user)}
+            if pid not in owners
+            or owners[pid] == (domain, user)
+            or owners[pid] == elevated_self}
 
 
 def _win_cpu_percent(prev, cur, dt_wall, cores):

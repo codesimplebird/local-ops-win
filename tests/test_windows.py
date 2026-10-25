@@ -211,29 +211,37 @@ class WindowsParsingTests(unittest.TestCase):
 
     def test_win_process_owner_self(self):
         domain, user = server._win_process_owner(os.getpid())
-        self.assertEqual(user, os.environ.get("USERNAME"))
-        self.assertEqual(domain, os.environ.get("USERDOMAIN"))
+        # 普通权限下等于 (USERDOMAIN, USERNAME)；观察者与进程都提权时
+        # （如以管理员运行的 CI Runner），令牌所有者是 BUILTIN\Administrators 组
+        current = server._win_current_owner()
+        self.assertIn((domain, user),
+                      {current, ("BUILTIN", "Administrators")})
         # 非法 pid：OpenProcess 失败 → ("", "")，不抛异常
         self.assertEqual(server._win_process_owner(0), ("", ""))
         self.assertEqual(server._win_process_owner(-1), ("", ""))
+        # 端到端：自身进程在普通与提权两种形态下都必须通过当前用户过滤
+        owners = server._win_listener_owners({os.getpid()})
+        self.assertIn(os.getpid(), server._win_filter_own_pids(
+            {os.getpid()}, owners, current))
 
     def test_win_listener_owners_and_filter(self):
         owners = server._win_listener_owners({os.getpid(), 0, -3, "x"})
         self.assertEqual(set(owners), {os.getpid()})
-        self.assertEqual(owners[os.getpid()],
-                         (os.environ.get("USERDOMAIN"),
-                          os.environ.get("USERNAME")))
+        self.assertIn(owners[os.getpid()],
+                      (server._win_current_owner(),
+                       ("BUILTIN", "Administrators")))
         current = ("DESKTOP-AB", "dev")
         fake = {100: ("DESKTOP-AB", "dev"),
                 200: ("NT AUTHORITY", "SYSTEM"),
-                300: ("", "")}  # 存活但所有者不可读（SYSTEM/受保护）→ 落选
+                300: ("", ""),       # 存活但所有者不可读（受保护）→ 落选
+                400: ("BUILTIN", "Administrators")}  # 提权自身 → 视同当前用户
         self.assertEqual(
-            server._win_filter_own_pids({100, 200, 300}, fake, current),
-            {100})
+            server._win_filter_own_pids({100, 200, 300, 400}, fake, current),
+            {100, 400})
         # owners 缺失的 pid（所有者未知，如查询瞬间已退出）不过滤
         self.assertEqual(
-            server._win_filter_own_pids({100, 200, 400}, fake, current),
-            {100, 400})
+            server._win_filter_own_pids({100, 200, 500}, fake, current),
+            {100, 400, 500})
         # owners 为 None 或当前用户名缺失：退化为不过滤
         self.assertEqual(
             server._win_filter_own_pids({100, 200, 300}, None, current),
