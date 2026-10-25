@@ -241,7 +241,7 @@ class WindowsParsingTests(unittest.TestCase):
         # owners 缺失的 pid（所有者未知，如查询瞬间已退出）不过滤
         self.assertEqual(
             server._win_filter_own_pids({100, 200, 500}, fake, current),
-            {100, 400, 500})
+            {100, 500})
         # owners 为 None 或当前用户名缺失：退化为不过滤
         self.assertEqual(
             server._win_filter_own_pids({100, 200, 300}, None, current),
