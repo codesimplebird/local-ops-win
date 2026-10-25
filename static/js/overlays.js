@@ -20,6 +20,7 @@ const iconPreview = $('#iconPreview');
 const iconPreviewImg = $('#iconPreviewImg'), iconPreviewGlyph = $('#iconPreviewGlyph');
 const iconPreviewTxt = $('#iconPreviewTxt');
 const appearanceDetails = $('#appearanceDetails'), appearanceChevron = $('#appearanceChevron');
+const presetPanel = $('#presetPanel'), presetSearch = $('#presetSearch'), presetList = $('#presetList');
 const appCancel = $('#appCancel'), appSave = $('#appSave');
 const appStopEdit = $('#appStopEdit'), editRunningNotice = $('#editRunningNotice');
 
@@ -243,6 +244,7 @@ function setModalKind(kind) {
   });
   portField.hidden = modalKind === 'task';
   fPort.disabled = modalKind === 'task';
+  presetPanel.hidden = modalKind === 'task';
   setText(fCmdLabel, modalKind === 'task' ? '执行命令' : '启动命令');
   fName.placeholder = modalKind === 'task' ? '如：每日备份' : '如：本地博客';
   fCmd.placeholder = modalKind === 'task'
@@ -254,6 +256,8 @@ function setModalKind(kind) {
 }
 kindRow.querySelectorAll('.kind-btn').forEach(b =>
   b.addEventListener('click', () => setModalKind(b.dataset.kind)));
+presetSearch.addEventListener('input', () => renderServicePresets(presetSearch.value));
+renderServicePresets('');
 
 export function openAppModal(app, presetKind, focusAction = '') {
   editingAppId = app ? app.id : null;
@@ -302,6 +306,66 @@ export function closeAppModal() {
   selectedGlyph = null;
   removeStoredIcon = false;
   pendingAttach = null;
+}
+
+/* 常用服务模板：常见本地服务的预置命令/端口，搜索点选即填入。
+   与项目识别互补——识别面向「某个文件夹里的项目」，模板面向
+   「装在系统里的常见服务」（Ollama、数据库等，没有项目目录）。 */
+const SERVICE_PRESETS = [
+  { name: 'Ollama', command: 'ollama serve', port: 11434,
+    keywords: 'llm 大模型 ai 本地模型 ollama' },
+  { name: 'Redis', command: 'redis-server', port: 6379,
+    keywords: '缓存 kv 数据库 redis' },
+  { name: 'PostgreSQL', command: 'postgres -D data', port: 5432,
+    keywords: '数据库 pg postgres sql' },
+  { name: 'MySQL', command: 'mysqld', port: 3306,
+    keywords: '数据库 mysql mariadb sql' },
+  { name: 'MongoDB', command: 'mongod', port: 27017,
+    keywords: '数据库 mongo nosql' },
+  { name: 'MinIO', command: 'minio server ./data', port: 9000,
+    keywords: '对象存储 s3 存储 minio' },
+  { name: 'Qdrant', command: 'qdrant', port: 6333,
+    keywords: '向量数据库 vector qdrant' },
+  { name: '静态文件服务器', command: 'python -m http.server 8000', port: 8000,
+    keywords: '静态 http server 文件 预览' },
+];
+
+function applyServicePreset(preset) {
+  fName.value = preset.name;
+  clearFieldError(fName);
+  fCmd.value = preset.command;
+  clearFieldError(fCmd);
+  if (preset.port != null) {
+    fPort.value = String(preset.port);
+    detectedPortValue = preset.port;
+  }
+  refreshEditSaveMode();
+  toast('已填入“' + preset.name + '”，可按需修改命令与端口');
+}
+
+function renderServicePresets(filter) {
+  const query = (filter || '').trim().toLowerCase();
+  presetList.replaceChildren();
+  const matched = SERVICE_PRESETS.filter(preset =>
+    !query || (preset.name + ' ' + preset.keywords + ' ' + preset.command)
+      .toLowerCase().includes(query));
+  for (const preset of matched) {
+    const chip = el('button', 'preset-chip');
+    chip.type = 'button';
+    const name = el('span', 'preset-chip-name');
+    name.textContent = preset.name;
+    const port = el('span', 'preset-chip-port mono');
+    port.textContent = ':' + preset.port;
+    chip.append(name, port);
+    chip.title = preset.command;
+    chip.addEventListener('click', () => applyServicePreset(preset));
+    presetList.appendChild(chip);
+  }
+  if (!matched.length) {
+    const empty = el('span', 'preset-empty');
+    empty.textContent = '没有匹配的模板，可直接手动填写';
+    presetList.appendChild(empty);
+  }
 }
 
 function applyDetectedCandidate(candidate, option) {

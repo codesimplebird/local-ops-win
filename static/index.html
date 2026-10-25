@@ -462,6 +462,23 @@
         <button class="btn" id="btnPickCwd" type="button">选择…</button>
       </div>
     </div>
+    <details class="appearance-details" id="presetPanel">
+      <summary>
+        <span class="appearance-summary-main">
+          <span class="appearance-summary-title">常用服务模板</span>
+          <span class="appearance-optional">Ollama、数据库等常见本地服务，点选直接填入</span>
+        </span>
+        <span class="appearance-disclosure">
+          <span class="appearance-disclosure-closed">展开</span>
+          <span class="appearance-disclosure-open">收起</span>
+          <span class="appearance-chevron" aria-hidden="true"></span>
+        </span>
+      </summary>
+      <div class="field">
+        <input id="presetSearch" placeholder="搜索：ollama、redis、数据库…" autocomplete="off" aria-label="搜索常用服务模板">
+      </div>
+      <div class="preset-list" id="presetList" role="list" aria-label="常用服务模板"></div>
+    </details>
     <div class="detect-panel" id="detectPanel" aria-live="polite" hidden>
       <div class="detect-heading">
         <span id="detectSummary">正在识别项目…</span>

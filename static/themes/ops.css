@@ -828,6 +828,21 @@ body.dragging-on { cursor: grabbing; user-select: none; -webkit-user-select: non
 }
 .detect-option-head { display: flex; align-items: center; gap: 7px; }
 .detect-option-title { font-size: 12.5px; font-weight: 700; }
+/* 常用服务模板：小尺寸可选芯片（添加服务弹窗内） */
+.preset-list { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 0 6px; }
+.preset-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 99px;
+  background: var(--card); color: var(--ink); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all 0.12s ease;
+}
+.preset-chip:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+.preset-chip:active { transform: translateY(1px); }
+.preset-chip-port { font-size: 10px; color: var(--ink-3); font-weight: 500; }
+.preset-empty { font-size: 11.5px; color: var(--ink-3); padding: 2px 0; }
 .detect-recommended {
   font-family: var(--font-mono); font-size: 9px; font-weight: 700;
   padding: 1px 7px; border-radius: 99px;
