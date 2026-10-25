@@ -715,37 +715,106 @@ def _parse_win_process_table_json(text):
             "args": item.get("CommandLine") or "",
             "created": item.get("CreationDate") or "",
             "ws": item.get("WorkingSetSize"),
+            # 100ns 单位的累计 CPU 时间，供两次快照差值推算 CPU%
+            "utime": item.get("UserModeTime"),
+            "ktime": item.get("KernelModeTime"),
         }
     return table
 
 
-def _win_process_table():
-    """一次性 CIM 快照 → {pid: {ppid, args, name, exe, created, ws}}。"""
-    script = (
-        "Get-CimInstance Win32_Process | "
-        "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,"
-        "CommandLine,CreationDate,WorkingSetSize | ConvertTo-Json -Compress")
-    return _parse_win_process_table_json(
-        _win_powershell(script, timeout=SUBPROCESS_TIMEOUT * 2))
+# CIM 全量进程快照开销大（PowerShell 启动 + 全表枚举），而一次状态构建
+# 有四处（pgid 树 / ps 快照 / 来源溯源 / 关注进程）各自取表。短 TTL 缓存
+# + 锁内单飞把它们归一为每轮轮询 1 个 PowerShell；prev 保留上一份快照供
+# CPU% 差值。
+_WIN_PROC_TABLE_SCRIPT = (
+    "Get-CimInstance Win32_Process | "
+    "Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,"
+    "CommandLine,CreationDate,WorkingSetSize,UserModeTime,KernelModeTime | "
+    "ConvertTo-Json -Compress")
+_WIN_PROC_TABLE_TTL = 1.2  # 秒；小于前端 2s 轮询周期
+_WIN_TABLE_LOCK = threading.Lock()
+_WIN_TABLE_CACHE = {"mono": 0.0, "table": None, "prev": None, "prev_mono": 0.0}
 
 
-_WIN_TOTAL_MEM_CACHE = {"mono": 0.0, "kb": 0.0}
+def _win_process_table(fresh=False):
+    """一次性 CIM 快照 → {pid: {ppid, args, name, exe, created, ws, ...}}。
+
+    TTL 内复用同一快照；fresh=True 绕过缓存（启停等写路径校验用）。
+    查询失败返回空 dict 且不更新缓存，下一轮重试。
+    """
+    with _WIN_TABLE_LOCK:
+        if not fresh:
+            cached = _WIN_TABLE_CACHE["table"]
+            if cached is not None and (
+                    time.monotonic() - _WIN_TABLE_CACHE["mono"]
+                    < _WIN_PROC_TABLE_TTL):
+                return cached
+        table = _parse_win_process_table_json(
+            _win_powershell(_WIN_PROC_TABLE_SCRIPT,
+                            timeout=SUBPROCESS_TIMEOUT * 2))
+        if table:
+            _WIN_TABLE_CACHE["prev"] = _WIN_TABLE_CACHE["table"]
+            _WIN_TABLE_CACHE["prev_mono"] = _WIN_TABLE_CACHE["mono"]
+            _WIN_TABLE_CACHE["table"] = table
+            _WIN_TABLE_CACHE["mono"] = time.monotonic()
+        return table
+
+
+def _win_table_history():
+    """(上一份快照, 与当前快照的间隔秒)，供 CPU% 差值；无历史返回 (None, 0.0)。"""
+    with _WIN_TABLE_LOCK:
+        return (_WIN_TABLE_CACHE["prev"],
+                max(0.0, _WIN_TABLE_CACHE["mono"] - _WIN_TABLE_CACHE["prev_mono"]))
+
+
+def _win_cpu_percent(prev, cur, dt_wall, cores):
+    """两次快照的 User/KernelModeTime（100ns 整型）差值 → CPU 百分比。
+
+    按全部逻辑核心归一（任务管理器口径，上限 100）；任一侧字段缺失
+    （无法计算）、差值为负（计数器异常或进程重建）或时间窗无效时返回 0。
+    """
+    def _count(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    pu, pk = _count(prev.get("utime")), _count(prev.get("ktime"))
+    cu, ck = _count(cur.get("utime")), _count(cur.get("ktime"))
+    if pu is None or pk is None or cu is None or ck is None:
+        return 0.0
+    du, dk = cu - pu, ck - pk
+    if du < 0 or dk < 0 or dt_wall <= 0:
+        return 0.0
+    seconds = (du + dk) / 1e7
+    return round(min(seconds / (dt_wall * max(1, cores)) * 100.0, 100.0), 1)
+
+
+class _WinMemoryStatusEx(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", wintypes.DWORD),
+        ("dwMemoryLoad", wintypes.DWORD),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+_KERNEL32.GlobalMemoryStatusEx.restype = wintypes.BOOL
+_KERNEL32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_WinMemoryStatusEx)]
 
 
 def _win_total_memory_kb():
-    """系统总物理内存（KB），10 秒缓存；失败返回 0。"""
-    now = time.monotonic()
-    if now - _WIN_TOTAL_MEM_CACHE["mono"] < 10.0:
-        return _WIN_TOTAL_MEM_CACHE["kb"]
-    out = _win_powershell(
-        "(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize")
-    try:
-        kb = float(out.strip())
-    except (TypeError, ValueError):
-        kb = 0.0
-    _WIN_TOTAL_MEM_CACHE["mono"] = now
-    _WIN_TOTAL_MEM_CACHE["kb"] = kb
-    return kb
+    """系统总物理内存（KB），ctypes 直读免子进程；失败返回 0。"""
+    stat = _WinMemoryStatusEx()
+    stat.dwLength = ctypes.sizeof(_WinMemoryStatusEx)
+    if not _KERNEL32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+        return 0.0
+    return stat.ullTotalPhys / 1024.0
 
 
 _WIN_EPOCH = 116444736000000000  # 1601-01-01 → 1970-01-01（100ns 单位）
@@ -1093,13 +1162,16 @@ def ps_snapshot(pids=None, with_uid=True):
 def _ps_snapshot_windows(pids=None):
     """CIM 快照 → 与 ps_snapshot 相同结构。
 
-    Windows 无 CPU% 瞬时值（需两次采样），v1 置 0；mem 用 WorkingSet 占比。
-    uid 统一为 0（本机单用户语义，与其他用户进程的隔离交给 taskkill 权限）。
+    CPU% 由缓存保留的上一份快照按 CPU 时间差推算（首见进程置 0）；
+    mem 用 WorkingSet 占比。uid 统一为 0（本机单用户语义，与其他用户
+    进程的隔离交给 taskkill 权限）。
     """
     table = _win_process_table()
     if not table:
         return {}
     total_kb = _win_total_memory_kb()
+    cores = os.cpu_count() or 1
+    prev, prev_dt = _win_table_history()
     result = {}
     for pid, info in table.items():
         if pids is not None and pid not in pids:
@@ -1110,11 +1182,16 @@ def _ps_snapshot_windows(pids=None):
         except (TypeError, ValueError):
             ws_bytes = 0.0
         mem = (ws_bytes / 1024.0 / total_kb * 100.0) if total_kb else 0.0
+        cpu = 0.0
+        if prev is not None and prev_dt >= 0.2:
+            pinfo = prev.get(pid)
+            if pinfo and pinfo.get("created") == info.get("created"):
+                cpu = _win_cpu_percent(pinfo, info, prev_dt, cores)
         result[pid] = {
             "uid": 0,
             "comm": info.get("exe") or info.get("name") or "",
             "args": info.get("args") or "",
-            "cpu": 0.0,
+            "cpu": cpu,
             "mem": round(mem, 2),
             "etime": _win_etime(info.get("created")),
         }
@@ -1446,19 +1523,31 @@ def build_watched(keywords):
     return result
 
 
-def pgid_members_map():
+def _managed_anchor_pids(apps):
+    """受管应用的锚点 pid 集合（lastPgid 优先，回退 lastPid）。"""
+    anchors = set()
+    for app in apps:
+        anchor = app.get("lastPgid") or app.get("lastPid")
+        if isinstance(anchor, int) and anchor > 0:
+            anchors.add(anchor)
+    return anchors
+
+
+def pgid_members_map(roots=None, fresh=False):
     """ps -axo pid=,pgid= → {pgid: [pid, ...]}。
     进程退出后其子孙仍保留原 pgid（被 launchd 收养也不变），
     因此按 pgid 能找到「脚本把服务放后台后自己退出」的存活成员。
     Windows 无 pgid：以「锚点 PID + PPID 后代」等价建模——子进程在父进程
     退出后同样保留原 PPID，语义与 macOS 的孤儿进程组一致。
+    roots（仅 Windows 生效）：只为给定锚点 pid 集合构建后代树，避免为
+    全系统每个进程各建一棵；None 保持全量。锚点已退出时仍保留条目，
+    孤儿后代按 PPID 仍挂在锚点上。
+    fresh（仅 Windows 生效）：绕过进程表缓存，启停等写路径校验用。
     """
     if IS_WIN:
-        table = _win_process_table()
-        groups = {}
-        for pid in table:
-            groups[pid] = _win_tree_of(pid, table)
-        return groups
+        table = _win_process_table(fresh=fresh)
+        keys = list(table) if roots is None else list(roots or ())
+        return {pid: _win_tree_of(pid, table) for pid in keys}
     groups = {}
     for line in run_cmd(["ps", "-axo", "pid=,pgid="]).splitlines():
         parts = line.split()
@@ -1491,7 +1580,13 @@ def managed_process_index(apps, groups=None):
             app.get("runToken")
             and isinstance(app.get("lastPgid") or app.get("lastPid"), int)
             for app in apps)
-        groups = pgid_members_map() if needs_groups else {}
+        if not needs_groups:
+            groups = {}
+        elif IS_WIN:
+            # 写路径入口（停止/重启校验）：即时表，避免缓存漏掉刚启动的锚点
+            groups = pgid_members_map(_managed_anchor_pids(apps), fresh=True)
+        else:
+            groups = pgid_members_map()
     candidates = {}
     all_pids = set()
     for app in apps:
@@ -1697,7 +1792,13 @@ def build_state(cfg, console_port, config_health=None):
         app.get("runToken")
         and isinstance(app.get("lastPgid") or app.get("lastPid"), int)
         for app in cfg.get("apps") or [])
-    groups = pgid_members_map() if needs_groups else None
+    groups = None
+    if needs_groups:
+        if IS_WIN:
+            # Windows 只为受管锚点建树（全量建树近似 O(n²)）
+            groups = pgid_members_map(_managed_anchor_pids(cfg.get("apps") or []))
+        else:
+            groups = pgid_members_map()
     try:
         services, listeners = build_services(cfg, groups)
     except Exception as e:

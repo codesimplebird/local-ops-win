@@ -48,17 +48,74 @@ class WindowsParsingTests(unittest.TestCase):
         text = json.dumps([
             {"ProcessId": 1, "ParentProcessId": 0, "Name": "System",
              "ExecutablePath": None, "CommandLine": None,
-             "CreationDate": "20250401090000.000000+480", "WorkingSetSize": 0},
+             "CreationDate": "20250401090000.000000+480", "WorkingSetSize": 0,
+             "UserModeTime": 0, "KernelModeTime": 0},
             {"ProcessId": 42, "ParentProcessId": 1, "Name": "python.exe",
              "ExecutablePath": "C:\\py\\python.exe", "CommandLine": "python -m http.server",
-             "CreationDate": "2025-04-01T09:00:00Z", "WorkingSetSize": 1048576},
+             "CreationDate": "2025-04-01T09:00:00Z", "WorkingSetSize": 1048576,
+             "UserModeTime": 1562500000, "KernelModeTime": 312500000},
         ])
         table = server._parse_win_process_table_json(text)
         self.assertEqual(table[1]["ppid"], 0)
         self.assertEqual(table[42]["args"], "python -m http.server")
         self.assertEqual(table[42]["exe"], "C:\\py\\python.exe")
+        self.assertEqual(table[42]["utime"], 1562500000)
+        self.assertEqual(table[42]["ktime"], 312500000)
         self.assertEqual(server._parse_win_process_table_json(""), {})
         self.assertEqual(server._parse_win_process_table_json("not json"), {})
+
+    def test_win_cpu_percent(self):
+        # 1s 用户 + 1s 内核 / 2s 窗口 / 4 核 → 25.0
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": 0, "ktime": 0},
+                {"utime": 1e7, "ktime": 1e7}, 2.0, 4),
+            25.0)
+        # 单核满载 → 100.0；超限截断到 100
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": 0, "ktime": 0},
+                {"utime": 2e7, "ktime": 0}, 2.0, 1),
+            100.0)
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": 0, "ktime": 0},
+                {"utime": 1e8, "ktime": 0}, 1.0, 1),
+            100.0)
+        # 计数器回退 / 时间窗无效 / 字段缺失 → 0
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": 5e7, "ktime": 0},
+                {"utime": 1e7, "ktime": 0}, 2.0, 4),
+            0.0)
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": 0, "ktime": 0},
+                {"utime": 1e7, "ktime": 0}, 0.0, 4),
+            0.0)
+        self.assertEqual(
+            server._win_cpu_percent(
+                {"utime": None, "ktime": None},
+                {"utime": 1e7, "ktime": 1e7}, 2.0, 4),
+            0.0)
+
+    def test_pgid_members_map_windows_roots(self):
+        table = {
+            1: {"ppid": 0}, 2: {"ppid": 1}, 3: {"ppid": 2}, 9: {"ppid": 0},
+        }
+        with mock.patch.object(server, "_win_process_table",
+                               return_value=table) as fetch:
+            # 只为受管锚点建树：条目数与 roots 一致，而非全系统每 pid 一棵
+            self.assertEqual(server.pgid_members_map({1}),
+                             {1: [1, 2, 3]})
+            self.assertEqual(server.pgid_members_map({1, 9}),
+                             {1: [1, 2, 3], 9: [9]})
+            # 锚点已退出（不在表中）仍有条目：孤儿后代按 PPID 挂在锚点上
+            self.assertEqual(server.pgid_members_map({77}), {77: [77]})
+            # None 保持全量
+            full = server.pgid_members_map()
+            self.assertEqual(set(full), {1, 2, 3, 9})
+            fetch.assert_called_with(fresh=False)
 
     def test_win_quote(self):
         self.assertEqual(server._win_quote("C:\\my dir\\job.py"),
@@ -129,6 +186,62 @@ class WindowsParsingTests(unittest.TestCase):
                 with mock.patch.object(server.shutil, "which",
                                        side_effect=fake_which):
                     self.assertEqual(server.command_for_script(path), expected)
+
+
+@unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
+class WinProcTableCacheTests(unittest.TestCase):
+    """进程表 TTL 缓存：单飞复用、失败不缓存、fresh 直通。"""
+
+    def setUp(self):
+        self._saved = dict(server._WIN_TABLE_CACHE)
+        server._WIN_TABLE_CACHE.update(
+            {"mono": 0.0, "table": None, "prev": None, "prev_mono": 0.0})
+
+    def tearDown(self):
+        server._WIN_TABLE_CACHE.clear()
+        server._WIN_TABLE_CACHE.update(self._saved)
+
+    @staticmethod
+    def _cim_text(pid=42):
+        return json.dumps([{
+            "ProcessId": pid, "ParentProcessId": 1, "Name": "python.exe",
+            "ExecutablePath": "C:\\py\\python.exe", "CommandLine": "python app.py",
+            "CreationDate": "/Date(1743498000000)/", "WorkingSetSize": 1024,
+            "UserModeTime": 0, "KernelModeTime": 0}])
+
+    def test_ttl_cache_single_flight(self):
+        with mock.patch.object(server, "_win_powershell",
+                               return_value=self._cim_text()) as ps:
+            first = server._win_process_table()
+            second = server._win_process_table()
+            self.assertEqual(ps.call_count, 1)
+            self.assertIs(first, second)
+            # fresh 直通缓存（写路径校验用）
+            server._win_process_table(fresh=True)
+            self.assertEqual(ps.call_count, 2)
+
+    def test_failed_fetch_not_cached(self):
+        replies = iter(["", self._cim_text()])
+        with mock.patch.object(server, "_win_powershell",
+                               side_effect=lambda *a, **k: next(replies)) as ps:
+            self.assertEqual(server._win_process_table(), {})
+            # 失败结果不落缓存：下一次普通调用重新查询并拿到数据
+            table = server._win_process_table()
+            self.assertEqual(ps.call_count, 2)
+            self.assertIn(42, table)
+
+    def test_history_keeps_previous_snapshot(self):
+        replies = iter([self._cim_text(42), self._cim_text(43)])
+        with mock.patch.object(server, "_win_powershell",
+                               side_effect=lambda *a, **k: next(replies)):
+            self.assertIsNone(server._win_table_history()[0])
+            server._win_process_table()
+            prev, _ = server._win_table_history()
+            self.assertIsNone(prev)  # 首次成功没有历史
+            server._win_process_table(fresh=True)
+            prev, dt = server._win_table_history()
+            self.assertIn(42, prev)
+            self.assertGreaterEqual(dt, 0.0)
 
 
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
@@ -208,7 +321,14 @@ class WindowsProcessTests(unittest.TestCase):
                 snap = server.ps_snapshot({proc.pid})
                 self.assertIn("console-run:" + token,
                               snap.get(proc.pid, {}).get("args", ""))
-                self.assertIn(port, {p for _, p in server.scan_listeners()})
+                # 受管身份与端口监听是独立事件：进程表缓存让身份识别明显
+                # 变快，服务 bind 完成需要再等一等（轮询而非立即断言）
+                listening = False
+                deadline = time.time() + 10
+                while time.time() < deadline and not listening:
+                    time.sleep(0.3)
+                    listening = port in {p for _, p in server.scan_listeners()}
+                self.assertTrue(listening, "服务未在配置端口上监听")
                 stopped, error = server.stop_app_and_clear(
                     cfg, tracked, timeout=10)
                 self.assertTrue(stopped, error)
@@ -217,6 +337,15 @@ class WindowsProcessTests(unittest.TestCase):
             finally:
                 if server.pid_alive(proc.pid):
                     server.stop_pid_tree(proc.pid)
+                # 等端口释放（子进程退出）再让 TemporaryDirectory 清理，
+                # 避免子进程仍以 td 为工作目录/持有日志句柄时 rmdir 报
+                # WinError 145（目录不是空的）
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    if not server.pid_alive(proc.pid) and \
+                            port not in {p for _, p in server.scan_listeners()}:
+                        break
+                    time.sleep(0.2)
 
     def test_win_launch_env_keeps_path_and_token(self):
         env = server.build_launch_env("win-secret", {"PATH": "C:\\bin"})
