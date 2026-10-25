@@ -1281,5 +1281,50 @@ class ThemeTests(unittest.TestCase):
             self.assertIsInstance(snap["apps"], list)
 
 
+@unittest.skipIf(not server.IS_WIN, "Windows 启动脚本识别专属")
+class WindowsStartScriptDetectTests(unittest.TestCase):
+    def _detect(self, names):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            for name in names:
+                with open(os.path.join(td, name), "w",
+                          encoding="utf-8") as f:
+                    f.write("@echo off\r\n")
+            result, error = server.detect_project(td)
+        self.assertIsNone(error)
+        return result
+
+    def _script_candidate(self, result):
+        return next((c for c in result["candidates"]
+                     if c["source"].endswith((".bat", ".cmd"))), None)
+
+    def test_chinese_start_script_is_recognized(self):
+        result = self._detect(["启动GPU服务.bat"])
+        candidate = self._script_candidate(result)
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["source"], "启动GPU服务.bat")
+
+    def test_exact_name_priority_over_prefix_variants(self):
+        result = self._detect(["run_gpu.bat", "start.bat", "启动服务.bat"])
+        self.assertEqual(self._script_candidate(result)["source"], "start.bat")
+
+    def test_prefix_variant_recognized_when_no_exact_name(self):
+        result = self._detect(["start_tts.bat"])
+        self.assertEqual(self._script_candidate(result)["source"],
+                         "start_tts.bat")
+
+    def test_single_generic_script_is_offered(self):
+        result = self._detect(["worker.bat"])  # 无已知词干但全目录仅此一个
+        self.assertEqual(self._script_candidate(result)["source"], "worker.bat")
+
+    def test_multiple_generic_scripts_are_ambiguous(self):
+        result = self._detect(["worker.bat", "migrate.bat"])
+        self.assertIsNone(self._script_candidate(result))
+
+    def test_tooling_scripts_are_never_offered(self):
+        result = self._detect(["activate.bat", "install.bat"])
+        self.assertIsNone(self._script_candidate(result))
+
+
 if __name__ == "__main__":
     unittest.main()

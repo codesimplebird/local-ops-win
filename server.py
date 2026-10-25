@@ -2968,13 +2968,51 @@ def detect_project(root):
         add("cargo run", "Rust 项目", "Cargo.toml", None, 61)
 
     if IS_WIN:
-        for script_name in ("start.bat", "dev.bat", "run.bat",
-                            "start.cmd", "dev.cmd", "run.cmd", "start.ps1"):
+        # 启动脚本识别：常见英文名精确命中按既定优先级；其次按词干前缀
+        # （start_xxx / 启动xxx / run-server 变体）；最后若根目录恰好只有
+        # 一个非工具性 .bat/.cmd 也作为候选。工具性脚本（activate/install/
+        # setup/build/test 等）不算启动入口。
+        start_tokens = ("start", "dev", "run", "serve", "server",
+                        "app", "main", "launch", "启动", "运行")
+
+        def _exact_rank(stem):
+            lowered = stem.lower()
+            for rank, token in enumerate(start_tokens):
+                if lowered == token:
+                    return rank
+            return None
+
+        def _is_tooling(stem):
+            return stem.lower().startswith((
+                "activate", "install", "setup", "build", "test", "uninstall",
+                "upgrade", "update", "download", "get-", "make"))
+
+        scripts = sorted(
+            name for name in os.listdir(root)
+            if name.lower().endswith((".bat", ".cmd")))
+        exact_named = sorted(
+            (name for name in scripts
+             if _exact_rank(os.path.splitext(name)[0]) is not None),
+            key=lambda name: _exact_rank(os.path.splitext(name)[0]))
+        prefixed = [name for name in scripts
+                    if name not in exact_named
+                    and any(os.path.splitext(name)[0].lower().startswith(t)
+                            for t in start_tokens)]
+        generic = [name for name in scripts if not _is_tooling(
+            os.path.splitext(name)[0])]
+        chosen = (exact_named + prefixed) or (generic if len(scripts) == 1 else [])
+        if chosen:
+            script_name = chosen[0]
+            note_file(script_name)
+            add(_win_quote(os.path.join(root, script_name)),
+                "现有启动脚本", script_name, None, 70,
+                "也可以继续使用“选择脚本”手动指定")
+        for script_name in ("start.ps1", "dev.ps1", "run.ps1"):
             if os.path.isfile(os.path.join(root, script_name)):
                 note_file(script_name)
-                add(_win_quote(os.path.join(root, script_name)),
-                    "现有启动脚本", script_name, None, 70,
-                    "也可以继续使用“选择脚本”手动指定")
+                add("powershell -NoProfile -ExecutionPolicy Bypass -File %s"
+                    % _win_quote(os.path.join(root, script_name)),
+                    "现有 PowerShell 启动脚本", script_name, None, 71)
                 break
         if shutil.which("bash"):  # Git Bash 可用时同样识别 sh 启动脚本
             for script_name in ("start.sh", "dev.sh", "run.sh",
