@@ -35,7 +35,7 @@ class HttpHarness:
         self.tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
-        conn = http.client.HTTPConnection(server.HOST, self.port, timeout=4)
+        conn = http.client.HTTPConnection(server.HOST, self.port, timeout=30)  # 慢速 CI runner 首次 /api/state 需多个 PowerShell，超时仅兜底死锁
         request_headers = dict(headers or {})
         if body is not None and not isinstance(body, (bytes, bytearray)):
             body = body.encode("utf-8")
