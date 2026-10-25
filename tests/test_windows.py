@@ -414,6 +414,15 @@ class WinAutostartTests(unittest.TestCase):
                 self.assertTrue(ok, error)
 
 
+def _mbcs_encodable(text):
+    """系统 ANSI 代码页能否无损表示该文本（中文系统可，cp1252 不可）。"""
+    try:
+        text.encode("mbcs")
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
 class WindowsProcessTests(unittest.TestCase):
     def test_pid_alive_detects_exit(self):
@@ -488,6 +497,9 @@ class WindowsProcessTests(unittest.TestCase):
                 if server.pid_alive(proc.pid):
                     server.stop_pid_tree(proc.pid)
 
+    @unittest.skipIf(not _mbcs_encodable("启动任务.bat"),
+                     "系统 ANSI 代码页无法表示中文路径（cmd 同样无法执行，"
+                     "产品在该环境按 errors=replace 优雅降级）")
     def test_task_with_chinese_path_runs_under_utf8_mode_python(self):
         """中文路径/文件名的启动命令必须能执行（回归：批处理编码）。
 
