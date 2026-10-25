@@ -51,6 +51,8 @@ jobs:
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      # runner 的 pwsh/stdout 默认 cp1252，脚本中文输出会 UnicodeEncodeError
+      PYTHONUTF8: "1"
 
     steps:
       - name: Check out source
@@ -96,6 +98,7 @@ jobs:
     timeout-minutes: 25
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
 
     steps:
       - name: Check out source
