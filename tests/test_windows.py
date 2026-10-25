@@ -488,6 +488,31 @@ class WindowsProcessTests(unittest.TestCase):
                 if server.pid_alive(proc.pid):
                     server.stop_pid_tree(proc.pid)
 
+    def test_task_with_chinese_path_runs_under_utf8_mode_python(self):
+        """中文路径/文件名的启动命令必须能执行（回归：批处理编码）。
+
+        Python 处于 UTF-8 模式时 locale.getpreferredencoding 返回 UTF-8，
+        而 cmd 按 ANSI 代码页解析 .cmd；锚点批处理若按 UTF-8 写中文路径，
+        cmd 报 exit 9009（命令未找到）。批处理必须用 mbcs 写入。
+        （UTF-8 模式是触发条件，本功能断言在任意编码模式下都应成立）
+        """
+        with tempfile.TemporaryDirectory() as td:
+            subdir = os.path.join(td, "语音服务")
+            os.makedirs(subdir)
+            script = os.path.join(subdir, "启动任务.bat")
+            with open(script, "w", encoding="mbcs", newline="\r\n") as f:
+                f.write("@echo off\r\n@echo started-ok\r\nexit /b 7\r\n")
+            app = {**server.Config.APP_DEFAULT, "id": "win000003",
+                   "kind": "task", "cwd": td,
+                   "command": '"%s"' % script}
+            ok, error, proc, _, _ = server.start_app(app)
+            self.assertTrue(ok, error)
+            try:
+                self.assertEqual(proc.wait(timeout=20), 7)
+            finally:
+                if server.pid_alive(proc.pid):
+                    server.stop_pid_tree(proc.pid)
+
     def test_service_lifecycle_managed_stop(self):
         port = _free_port()
         with tempfile.TemporaryDirectory() as td, \

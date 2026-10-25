@@ -19,7 +19,6 @@ PPID 后代树识别（Windows 子进程在父进程退出后仍保留原 PPID�
 """
 
 import ctypes
-import locale
 import os
 import subprocess
 import sys
@@ -33,10 +32,15 @@ TH32CS_SNAPPROCESS = 0x00000002
 
 
 def _batch_file(command):
-    """写入临时 .cmd 文件，返回其路径。调用方负责删除。"""
-    encoding = locale.getpreferredencoding(False) or "utf-8"
+    """写入临时 .cmd 文件，返回其路径。调用方负责删除。
+
+    必须用 ANSI 代码页（mbcs）写入：cmd 解析 .cmd 文件永远走系统
+    ANSI/OEM 代码页（中文系统为 GBK）。Python 开启 UTF-8 模式时
+    locale.getpreferredencoding 返回 UTF-8，写出的中文路径会被 cmd
+    读成乱码并报 exit 9009（命令未找到）。
+    """
     fd, path = tempfile.mkstemp(prefix="console-", suffix=".cmd")
-    with os.fdopen(fd, "w", encoding=encoding, errors="replace",
+    with os.fdopen(fd, "w", encoding="mbcs", errors="replace",
                    newline="\r\n") as f:
         f.write("@echo off\r\n")
         f.write(command + "\r\n")
