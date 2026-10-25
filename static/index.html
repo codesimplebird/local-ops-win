@@ -273,6 +273,18 @@
                    aria-live="polite" aria-relevant="additions removals"></div>
             </section>
 
+            <!-- 正在运行但未纳入启动台的常驻服务（持续安静提示；新端口发现是会话级的，这里补上开机自启服务的可见性） -->
+            <section class="port-discovery unmanaged-hint" id="unmanagedHint" aria-labelledby="unmanagedHintTitle" hidden>
+              <div class="port-discovery-head">
+                <span class="port-discovery-icon" id="unmanagedHintIcon" aria-hidden="true"></span>
+                <div>
+                  <h3 id="unmanagedHintTitle">未纳入启动台的本机服务</h3>
+                  <p>正在运行但不由总控台管理（如开机自启的 Ollama 等）；在下方服务表格行尾点「加入启动台」即可接管。</p>
+                </div>
+                <span class="port-discovery-count" id="unmanagedCount">0</span>
+              </div>
+            </section>
+
             <!-- 我的服务 -->
             <section class="panel">
               <div class="sec-label"><span>Services · 我的服务</span><span class="sec-count" id="mineSecCount"></span><i></i><div class="filter-row" id="mineFilter" role="group" aria-label="筛选我的服务"></div></div>

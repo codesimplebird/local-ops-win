@@ -19,6 +19,8 @@ const statMine = $('#statMine'), statBg = $('#statBg'), statTime = $('#statTime'
 const statCpu = $('#statCpu'), statMem = $('#statMem'), statWarn = $('#statWarn');
 const portDiscovery = $('#portDiscovery'), portDiscoveryList = $('#portDiscoveryList');
 const portDiscoveryCount = $('#portDiscoveryCount'), portDiscoveryIcon = $('#portDiscoveryIcon');
+const unmanagedHint = $('#unmanagedHint'), unmanagedCount = $('#unmanagedCount'),
+      unmanagedHintIcon = $('#unmanagedHintIcon');
 let serviceCommandId = 0;
 
 function findSvc(key) {
@@ -35,6 +37,7 @@ const discoveryItems = new Map();
 let discoveryNeedsBaseline = true;
 
 setChildren(portDiscoveryIcon, icon('activity', 17));
+setChildren(unmanagedHintIcon, icon('server', 17));
 
 function serviceSnapshotHealthy(data) {
   return !(data.degradedReasons || [])
@@ -122,6 +125,18 @@ export function observePortDiscovery(data) {
       discoveryItems.delete(key);
     }
   }
+
+  /* 常驻未纳管提示：新端口发现是会话级的（首次加载静默建基线是刻意的
+     防打扰设计），开机自启、页面打开前就在运行的服务因此永远不会出现在
+     发现栏——这里持续反映当前未纳管的 mine 服务数量补上可见性，
+     不弹 toast、不打扰。 */
+  let unmanaged = 0;
+  for (const svc of current.values()) {
+    if (discoveryEligible(svc, knownPorts)) unmanaged += 1;
+  }
+  unmanagedHint.hidden = unmanaged === 0;
+  setText(unmanagedCount, String(unmanaged));
+  unmanagedCount.setAttribute('aria-label', unmanaged + ' 个未纳入启动台的本机服务');
 }
 
 function openServiceAppModal(s) {
