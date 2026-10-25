@@ -1,3 +1,6 @@
 # Runtime remains Python-standard-library only. These packages are used solely
 # to regenerate checked-in brand derivative assets and icons.
 Pillow==12.3.0
+# Build-time only: bundles the stdlib-only server into a standalone Windows
+# onedir package (tools/build_exe.py). Never imported by server.py at runtime.
+pyinstaller==6.22.3

@@ -397,6 +397,26 @@ class WindowsProcessTests(unittest.TestCase):
             json.dump({**server.Config.DEFAULT, "apps": [app]}, f)
         return server.Config(path)
 
+    def test_frozen_program_argv_builders(self):
+        marker, command = "console-run:t", "python app.py"
+        argv = server._win_anchor_argv(marker, command)
+        self.assertEqual(argv[0], sys.executable)
+        argv[1].endswith("win_anchor.py")
+        self.assertEqual(argv[2:], [marker, command])
+        with mock.patch.object(server, "FROZEN", True):
+            self.assertEqual(
+                server._win_anchor_argv(marker, command),
+                [sys.executable, "--win-anchor", marker, command])
+            self.assertEqual(
+                server._console_program_args(["--restart-helper", "1", "9600"]),
+                [sys.executable, "--restart-helper", "1", "9600"])
+        dev_args = server._console_program_args(["--restart-helper", "1", "9600"])
+        self.assertEqual(dev_args[0], sys.executable)
+        self.assertTrue(dev_args[1].endswith("server.py"))
+        self.assertEqual(dev_args[2:], ["--restart-helper", "1", "9600"])
+        # 锚点子命令参数不足直接拒绝，不触碰文件系统
+        self.assertEqual(server.run_win_anchor_subcommand(["x", "--win-anchor"]), 2)
+
     def test_task_exit_code_survives_cmd_wrapper(self):
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(server, "LOGS_DIR", td):

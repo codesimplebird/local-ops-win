@@ -81,11 +81,18 @@ else:  # pragma: no cover - macOS
     wintypes = None
     _KERNEL32 = None
     _NTDLL = None
+    _ADVAPI32 = None
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
+# PyInstaller onedir 打包形态：资源（VERSION/static/tools）由构建脚本铺设
+# 在 exe 同目录，运行时目录 = exe 所在目录；非 frozen 行为完全不变
+FROZEN = bool(getattr(sys, "frozen", False))
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if FROZEN:
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VERSION_PATH = os.path.join(BASE_DIR, "VERSION")
 LEGACY_DATA_DIR = os.path.join(BASE_DIR, "data")
 if IS_WIN:
@@ -2311,6 +2318,15 @@ def start_app(app):
     return True, None, proc, proc.pid, token
 
 
+def _win_anchor_argv(marker, command):
+    """锚点进程的启动 argv。开发形态：python tools/win_anchor.py …；
+    打包形态：exe 自身以 --win-anchor 子命令内联执行锚点逻辑。"""
+    if FROZEN:
+        return [sys.executable, "--win-anchor", marker, command]
+    anchor = os.path.join(BASE_DIR, "tools", "win_anchor.py")
+    return [sys.executable, anchor, marker, command]
+
+
 def _start_app_windows(app, cwd, logf, env, marker, token):
     """Windows 启动：python 锚点进程持有 marker，内部以 cmd /c 运行用户命令。
 
@@ -2318,15 +2334,15 @@ def _start_app_windows(app, cwd, logf, env, marker, token):
     因此服务/任务完成后的退出码、日志和“仍在运行”判定都能复现。
     受控身份 = 锚点 PID + marker 命令行 + PPID 后代树。
     """
-    anchor = os.path.join(BASE_DIR, "tools", "win_anchor.py")
-    if not os.path.isfile(anchor):
+    if not FROZEN and not os.path.isfile(
+            os.path.join(BASE_DIR, "tools", "win_anchor.py")):
         logf.close()
         return False, "缺少 tools/win_anchor.py，无法在 Windows 启动应用", None, None, None
     try:
         header = "\n===== 启动于 %s =====\n" % time.strftime("%Y-%m-%d %H:%M:%S")
         logf.write(header.encode("utf-8"))
         proc = subprocess.Popen(
-            [sys.executable, anchor, marker, app["command"]],
+            _win_anchor_argv(marker, app["command"]),
             cwd=cwd, stdout=logf, stderr=subprocess.STDOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             env=env)
@@ -4726,14 +4742,23 @@ def open_browser_later(port, delay=0.8):
     threading.Thread(target=_open, daemon=True).start()
 
 
+def _console_instance_match_token():
+    """识别同项目总控台实例的命令行标记。打包形态按 exe 文件名匹配
+    （argv 中没有 server.py）。"""
+    if FROZEN:
+        return os.path.basename(sys.executable).lower()
+    return "server.py"
+
+
 def find_console_instances():
     """查找从同一项目目录启动的总控台，用于双击启动器去重。"""
     snap = ps_snapshot(None, with_uid=True)
+    token = _console_instance_match_token()
     candidates = []
     for pid, info in snap.items():
         args = info.get("args") or ""
         if (pid == SELF_PID or info.get("uid") != SELF_UID
-                or "server.py" not in args
+                or token not in args.lower()
                 or "--restart-helper" in args):
             continue
         candidates.append(pid)
@@ -4858,11 +4883,18 @@ def launcher_main():
         raise
 
 
+def _console_program_args(extra):
+    """总控台自身再入参数：开发形态带上 server.py，打包形态 exe 直接传子命令。"""
+    if FROZEN:
+        return [sys.executable, *extra]
+    return [sys.executable, os.path.abspath(__file__), *extra]
+
+
 def schedule_console_restart(server, preferred_port):
     """启动独立 helper，响应发出后关闭当前 HTTP 服务。"""
     helper = subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--restart-helper",
-         str(SELF_PID), str(int(preferred_port))],
+        _console_program_args(["--restart-helper",
+                               str(SELF_PID), str(int(preferred_port))]),
         cwd=BASE_DIR, start_new_session=True, close_fds=True)
 
     def _shutdown():
@@ -4887,9 +4919,9 @@ def restart_helper(old_pid, preferred_port):
         time.sleep(0.1)
     if pid_alive(old_pid):
         return 1
-    args = [sys.executable, os.path.abspath(__file__),
-            "--preferred-port", str(int(preferred_port)), "--no-browser"]
-    os.execv(sys.executable, args)
+    os.execv(sys.executable,
+             _console_program_args(
+                 ["--preferred-port", str(int(preferred_port)), "--no-browser"]))
     return 0
 
 
@@ -4986,7 +5018,9 @@ def redirect_console_output():
 def main(preferred_port=None, open_browser=True, log_to_file=False):
     """Run exactly one console for this project/data directory."""
     migration = prepare_runtime_storage()
-    if log_to_file:
+    # 打包形态（--noconsole）sys.stderr 为 None，而请求日志每个请求都写
+    # stderr——无条件重定向到 console.log（redirect 对缺失句柄安全）
+    if log_to_file or FROZEN:
         redirect_console_output()
     if migration["dataMigrated"]:
         print("已将项目内旧配置和图标复制到: %s" % DATA_DIR,
@@ -5010,10 +5044,30 @@ def main(preferred_port=None, open_browser=True, log_to_file=False):
         release_instance_lock(instance_lock)
 
 
+def run_win_anchor_subcommand(argv):
+    """打包形态的锚点子命令入口：加载 tools/win_anchor.py 并执行 run()。
+
+    argv 形如 [--win-anchor, marker, command]。锚点代码与开发形态同一份
+    文件（构建时铺设在 exe 同目录），保持单一事实来源。
+    """
+    if len(argv) < 4:
+        return 2
+    path = os.path.join(BASE_DIR, "tools", "win_anchor.py")
+    if not os.path.isfile(path):
+        return 2
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("console_win_anchor", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.run(argv[2], argv[3])
+
+
 if __name__ == "__main__":
     if "--prepare-storage" in sys.argv:
         # 供安装/诊断流程预先验证迁移和目录权限，不启动 HTTP。
         prepare_runtime_storage()
+    elif "--win-anchor" in sys.argv:
+        sys.exit(run_win_anchor_subcommand(sys.argv))
     elif "--launcher" in sys.argv:
         launcher_main()
     elif "--restart-helper" in sys.argv:

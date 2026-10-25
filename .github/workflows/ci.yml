@@ -89,3 +89,46 @@ jobs:
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
           }
+
+  windows-package:
+    name: Windows package
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e450d5abe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependency
+        run: python -m pip install pyinstaller==6.22.3
+
+      - name: Build standalone package
+        run: python tools/build_exe.py
+
+      - name: Smoke test the packaged exe
+        shell: pwsh
+        run: |
+          $env:CONSOLE_DATA_DIR = "$env:RUNNER_TEMP\console-data"
+          $env:CONSOLE_LOG_DIR = "$env:RUNNER_TEMP\console-logs"
+          $proc = Start-Process .\dist\Console\Console.exe -ArgumentList '--no-browser','--preferred-port','9604' -PassThru -WindowStyle Hidden
+          try {
+            $deadline = (Get-Date).AddSeconds(40)
+            do {
+              Start-Sleep -Milliseconds 500
+              try { $health = Invoke-RestMethod 'http://127.0.0.1:9604/api/health' -TimeoutSec 2 } catch { $health = $null }
+            } while (-not $health -and (Get-Date) -lt $deadline)
+            if (-not $health) { throw '打包产物健康检查超时' }
+            if ($health.platform -ne 'win32') { throw 'platform 不是 win32' }
+            Write-Host "packaged exe health ok=$($health.ok) version=$($health.version)"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }

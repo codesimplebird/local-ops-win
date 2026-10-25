@@ -121,10 +121,8 @@ def _live_descendants(root_pid):
     return bool(seen)
 
 
-def main():
-    if len(sys.argv) < 3:
-        return 1
-    _marker, command = sys.argv[1], sys.argv[2]
+def run(marker, command):
+    """以锚点身份执行用户命令，返回退出码（供 server.py frozen 模式内联调用）。"""
     batch = _batch_file(command)
     try:
         proc = subprocess.Popen(
@@ -145,6 +143,12 @@ def main():
             os.remove(batch)
         except OSError:
             pass
+
+
+def main():
+    if len(sys.argv) < 3:
+        return 1
+    return run(sys.argv[1], sys.argv[2])
 
 
 if __name__ == "__main__":
