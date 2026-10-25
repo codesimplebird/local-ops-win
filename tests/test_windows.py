@@ -168,6 +168,27 @@ class WindowsParsingTests(unittest.TestCase):
         cyclic = server._win_tree_of(6, table)
         self.assertEqual(set(cyclic), {6, 7})
 
+    def test_win_tree_of_excludes_pid_reuse_phantoms(self):
+        # PID 复用：cmd(101) 复用了已退出进程的 PID 值；更早创建的孤儿
+        # (300) 的 ppid 恰好指向 101 —— 创建时间早于「父进程」，必须排除，
+        # 否则停止等待会被无关长命进程拖到超时
+        table = {
+            100: {"ppid": 0, "created": "/Date(100000)/"},    # 锚点
+            101: {"ppid": 100, "created": "/Date(200000)/"},  # cmd
+            200: {"ppid": 101, "created": "/Date(300000)/"},  # 服务
+            300: {"ppid": 101, "created": "/Date(50000)/"},   # 幽灵孤儿
+        }
+        self.assertEqual(set(server._win_tree_of(100, table)), {100, 101, 200})
+        # 创建时间相同（同毫秒级快照）保留；时间不可解析保守保留
+        same_time = {**table, 400: {"ppid": 101, "created": "/Date(200000)/"}}
+        self.assertEqual(
+            set(server._win_tree_of(100, same_time)), {100, 101, 200, 400})
+        no_time = {
+            100: {"ppid": 0, "created": "/Date(100000)/"},
+            101: {"ppid": 100},  # 缺 created
+        }
+        self.assertEqual(set(server._win_tree_of(100, no_time)), {100, 101})
+
     def test_win_command_for_script(self):
         cases = [
             ("C:\\path\\job.py", "py", 'py -3 -- "C:\\path\\job.py"'),
@@ -242,6 +263,64 @@ class WinProcTableCacheTests(unittest.TestCase):
             prev, dt = server._win_table_history()
             self.assertIn(42, prev)
             self.assertGreaterEqual(dt, 0.0)
+
+
+@unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
+class WinAnchorDescendantTests(unittest.TestCase):
+    """锚点后代探测：Toolhelp 快照（零子进程）+ PPID 链完整遍历。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "tools", "win_anchor.py")
+        spec = importlib.util.spec_from_file_location(
+            "win_anchor_under_test", os.path.abspath(path))
+        cls.anchor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.anchor)
+
+    def test_traversal_with_fake_snapshots(self):
+        anchor = self.anchor
+        with mock.patch.object(anchor, "_snapshot_children",
+                               return_value={100: [101], 101: [102]}):
+            # 链完整（含隔代）：100→101→102
+            self.assertTrue(anchor._live_descendants(100))
+        with mock.patch.object(anchor, "_snapshot_children",
+                               return_value={101: [102]}):
+            # 中间层死亡后链断裂：100 无存活直接子进程，隔代孤兒不可见
+            # （与 macOS 进程组的已知差异，服务端识别同为 PPID 树口径）
+            self.assertFalse(anchor._live_descendants(100))
+        with mock.patch.object(anchor, "_snapshot_children",
+                               return_value={}):
+            self.assertFalse(anchor._live_descendants(100))
+        with mock.patch.object(anchor, "_snapshot_children",
+                               return_value=None):
+            # 快照失败保守认为仍在运行
+            self.assertTrue(anchor._live_descendants(100))
+
+    def test_snapshot_and_real_child_lifecycle(self):
+        anchor = self.anchor
+        children = anchor._snapshot_children()
+        self.assertIsNotNone(children)
+        self.assertGreater(len(children), 0)
+        # 自身当前无子进程
+        self.assertFalse(anchor._live_descendants(os.getpid()))
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.assertTrue(anchor._live_descendants(os.getpid()))
+            proc.kill()
+            proc.wait()
+            deadline = time.time() + 3
+            while time.time() < deadline and \
+                    anchor._live_descendants(os.getpid()):
+                time.sleep(0.05)
+            self.assertFalse(anchor._live_descendants(os.getpid()))
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
 
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")

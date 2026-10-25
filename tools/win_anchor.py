@@ -18,16 +18,18 @@
 PPID 后代树识别（Windows 子进程在父进程退出后仍保留原 PPID）。
 """
 
-import json
+import ctypes
 import locale
 import os
 import subprocess
 import sys
 import tempfile
 import time
+from ctypes import wintypes
 
 CREATE_NO_WINDOW = 0x08000000
 POLL_SEC = 2.0
+TH32CS_SNAPPROCESS = 0x00000002
 
 
 def _batch_file(command):
@@ -42,36 +44,72 @@ def _batch_file(command):
     return path
 
 
-def _live_descendants(root_pid):
-    """root 是否有存活后代（含隔代；父进程已退出的孤儿仍按 PPID 命中）。"""
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive",
-             "-Command",
-             "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
-             "Get-CimInstance Win32_Process | "
-             "Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress"],
-            capture_output=True, timeout=10)
-        text = out.stdout.decode("utf-8", errors="replace") or ""
-    except Exception:
-        return True  # 查询失败时保守认为仍在运行
-    try:
-        items = json.loads(text)
-    except ValueError:
-        return True
-    if isinstance(items, dict):
-        items = [items]
+class _ProcessEntry32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+_kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+_kernel32.Process32FirstW.restype = wintypes.BOOL
+_kernel32.Process32FirstW.argtypes = [
+    wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+_kernel32.Process32NextW.restype = wintypes.BOOL
+_kernel32.Process32NextW.argtypes = [
+    wintypes.HANDLE, ctypes.POINTER(_ProcessEntry32W)]
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+_INVALID_HANDLE = wintypes.HANDLE(-1).value
+
+
+def _snapshot_children():
+    """CreateToolhelp32Snapshot → {ppid: [pid, ...]}；失败返回 None。
+
+    与 PowerShell CIM 等价的 pid/ppid 信息，但零子进程、毫秒级完成；
+    每个运行中应用的锚点每 2 秒轮询一次，起 PowerShell 会成倍放大开销。
+    """
+    snap = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == _INVALID_HANDLE:
+        return None
+    entry = _ProcessEntry32W()
+    entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
     children = {}
-    for item in items:
-        try:
-            pid = int(item.get("ProcessId") or 0)
-            ppid = int(item.get("ParentProcessId") or 0)
-        except (TypeError, ValueError):
-            continue
-        if pid <= 0:
-            continue
-        if ppid > 0:
-            children.setdefault(ppid, []).append(pid)
+    try:
+        ok = _kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            pid = entry.th32ProcessID
+            ppid = entry.th32ParentProcessID
+            if pid > 0 and ppid > 0:
+                children.setdefault(ppid, []).append(pid)
+            ok = _kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        _kernel32.CloseHandle(snap)
+    return children
+
+
+def _live_descendants(root_pid):
+    """root 是否有存活后代（沿 PPID 链完整遍历，含隔代）。
+
+    children 按 PPID 值索引、不关心中间层是否存活，因此只要链上有存活的
+    直接子进程，整条链（含隔代后代）都能找到。中间层全部死亡后链断裂、
+    更深的孤儿不再可见——这是 Windows PPID 树与 macOS 进程组的已知差异，
+    服务端受控识别（managed_pids）同为 PPID 树口径，两侧一致。
+    快照查询失败时保守认为仍在运行。
+    """
+    children = _snapshot_children()
+    if children is None:
+        return True  # 查询失败时保守认为仍在运行
     stack = list(children.get(root_pid, []))
     seen = set()
     while stack:
@@ -80,8 +118,7 @@ def _live_descendants(root_pid):
             continue
         seen.add(pid)
         stack.extend(children.get(pid, []))
-        return True
-    return False
+    return bool(seen)
 
 
 def main():

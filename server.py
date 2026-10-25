@@ -872,15 +872,34 @@ def _win_etime(created):
     return max(0, int(time.time() - created_ts))
 
 
+def _win_creation_epoch(info):
+    """table 条目的创建时间 → epoch 秒；条目缺失或时间不可解析返回 None。"""
+    if not info:
+        return None
+    return _win_parse_creation(info.get("created"))
+
+
 def _win_tree_of(root_pid, table):
     """root 及其全部存活后代（按 PPID 链，含孤儿：Windows 子进程在父进程
     退出后仍保留原 PPID）。返回有序列表。带 visited 防环——Windows 上
-    存在循环 PPID 的异常进程。"""
+    存在循环 PPID 的异常进程。
+
+    PID 复用防护：后代的创建时间必须不早于其父进程。孤儿进程的 ppid
+    常指向一个早已退出的进程，若该 PID 值后来被本树成员复用，孤儿的
+    创建时间必然早于新父进程，据此排除，避免停止等待被无关长命进程
+    拖到超时。任一侧时间不可解析时保守保留（维持旧行为）。
+    """
     children = {}
     for pid, info in table.items():
         ppid = info.get("ppid")
-        if isinstance(ppid, int) and ppid > 0:
-            children.setdefault(ppid, []).append(pid)
+        if not (isinstance(ppid, int) and ppid > 0):
+            continue
+        child_ts = _win_creation_epoch(info)
+        parent_ts = _win_creation_epoch(table.get(ppid))
+        if child_ts is not None and parent_ts is not None \
+                and child_ts < parent_ts:
+            continue
+        children.setdefault(ppid, []).append(pid)
     result = []
     stack = [root_pid]
     seen = set()
