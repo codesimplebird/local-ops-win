@@ -96,6 +96,47 @@ class HttpSecurityTests(unittest.TestCase):
         self.assertFalse(body["ok"])
         self.assertEqual(self.h.cfg.snapshot()["uiTheme"], "ops")
 
+    def test_cross_origin_autostart_write_is_rejected(self):
+        with mock.patch.object(server, "install_autostart",
+                               return_value=(True, None)) as install:
+            cookie = self._session_cookie()
+            headers = self._browser_headers(cookie, "https://attacker.example")
+            headers["Sec-Fetch-Site"] = "cross-site"
+            status, body, _ = self.h.request(
+                "POST", "/api/autostart",
+                json.dumps({"enabled": True}), headers)
+        self.assertEqual(status, 403)
+        self.assertFalse(body["ok"])
+        install.assert_not_called()
+
+    def test_autostart_endpoint_toggles_with_session(self):
+        cookie = self._session_cookie()
+        with mock.patch.object(server, "install_autostart",
+                               return_value=(True, None)) as install, \
+                mock.patch.object(server, "uninstall_autostart",
+                                  return_value=(True, None)) as uninstall, \
+                mock.patch.object(server, "autostart_installed",
+                                  side_effect=[True, False]):
+            status, body, _ = self.h.request(
+                "POST", "/api/autostart", json.dumps({"enabled": True}),
+                self._browser_headers(cookie))
+            self.assertEqual(status, 200)
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["installed"])
+            install.assert_called_once()
+            status, body, _ = self.h.request(
+                "POST", "/api/autostart", json.dumps({"enabled": False}),
+                self._browser_headers(cookie))
+            self.assertEqual(status, 200)
+            self.assertFalse(body["installed"])
+            uninstall.assert_called_once()
+            # enabled 非布尔值直接 400，不触碰系统
+            status, body, _ = self.h.request(
+                "POST", "/api/autostart", json.dumps({"enabled": "yes"}),
+                self._browser_headers(cookie))
+            self.assertEqual(status, 400)
+            self.assertFalse(body["ok"])
+
     def test_same_origin_browser_write_requires_valid_http_only_session(self):
         status, _, _ = self.h.request(
             "POST", "/api/ui/theme", json.dumps({"theme": "ops"}),

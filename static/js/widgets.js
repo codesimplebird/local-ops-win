@@ -74,6 +74,18 @@ export function initWidgets() {
     toggleTaskNotifications();
     syncSettings();
   });
+  $('#setAutostart').addEventListener('click', async () => {
+    const sw = $('#setAutostart');
+    const enabled = sw.getAttribute('aria-checked') !== 'true';
+    sw.disabled = true;
+    try {
+      const result = await act(post('/api/autostart', { enabled }));
+      if (result && result.ok !== false) toast(enabled ? '开机自启已开启' : '开机自启已关闭');
+    } finally {
+      sw.disabled = false;
+      syncSettings();
+    }
+  });
   $('#setAppearance').addEventListener('click', e => {
     const tab = e.target.closest('.mini-tab');
     if (!tab) return;
@@ -421,6 +433,15 @@ function syncSettings() {
     tab.classList.toggle('active', tab.dataset.appearance === mode);
   }
   const d = state.data || {};
+  const autostartRow = $('#setAutostartRow');
+  const autostartSupported = d.platform === 'win32';
+  autostartRow.hidden = !autostartSupported;
+  if (autostartSupported) {
+    const sw = $('#setAutostart');
+    const on = !!d.autostartInstalled;
+    sw.classList.toggle('on', on);
+    sw.setAttribute('aria-checked', String(on));
+  }
   setText($('#setVersion'), d.version ? 'v' + d.version : '—');
   setText($('#setPort'), d.consolePort ? ':' + d.consolePort : '—');
   setText($('#setCwd'), d.consoleCwd || '—');

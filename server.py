@@ -2047,6 +2047,7 @@ def build_state(cfg, console_port, config_health=None):
         "consolePid": SELF_PID,
         "consoleCwd": BASE_DIR,
         "platform": sys.platform,
+        "autostartInstalled": bool(IS_WIN and autostart_installed()),
         "version": APP_VERSION,
         "schemaVersion": cfg.get("schemaVersion", CURRENT_SCHEMA_VERSION),
         "degraded": bool(degraded_reasons),
@@ -4039,6 +4040,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/ui/theme":
                 self.handle_ui_theme()
                 return
+            if path == "/api/autostart":
+                self.handle_autostart()
+                return
             if path == "/api/pick":
                 self.handle_pick()
                 return
@@ -4145,6 +4149,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.server.cfg.update(lambda d: d.__setitem__("uiTheme", theme_id))
         self.send_json({"ok": True, "theme": theme_id})
+
+    def handle_autostart(self):
+        data, err = self.read_json_body()
+        if err:
+            self.send_err(400, err)
+            return
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            self.send_err(400, "enabled 必须是布尔值")
+            return
+        ok, error = (install_autostart() if enabled else uninstall_autostart())
+        if not ok:
+            self.send_err(500, error or "开机自启设置失败")
+            return
+        self.send_json({"ok": True, "enabled": enabled,
+                        "installed": autostart_installed()})
 
     def handle_console_restart(self):
         reserved, current, helper_pid = self.server.reserve_console_action("restart")
@@ -4821,7 +4841,12 @@ end run"""
 
 
 def launcher_main():
-    """start.command / start.bat 的无命令启动入口。"""
+    """start.command / start.bat 的无命令启动入口。
+
+    --no-browser：无实例时启动但不开浏览器（开机自启场景）；
+    有实例时仍打开页面。双击启动器不带该参数，行为不变。
+    """
+    open_browser = "--no-browser" not in sys.argv
     instances = find_console_instances()
     if IS_WIN:
         # Windows 没有 osascript 重启对话框：已有实例就打开页面，否则启动。
@@ -4831,14 +4856,14 @@ def launcher_main():
             webbrowser.open("http://%s:%d/" % (HOST, port))
             return
         try:
-            main(log_to_file=True)
+            main(log_to_file=True, open_browser=open_browser)
         except Exception:
             _launcher_alert("总控台启动失败。请检查数据目录权限和 console.log。")
             raise
         return
     if not instances:
         try:
-            main(log_to_file=True)
+            main(log_to_file=True, open_browser=open_browser)
         except Exception:
             _launcher_alert("总控台启动失败。请检查数据目录权限和 console.log。")
             raise
@@ -4910,6 +4935,92 @@ def schedule_console_stop(server):
         time.sleep(0.25)
         server.shutdown()
     threading.Thread(target=_shutdown, daemon=True).start()
+
+
+# ---------------------------------------------------------------- 开机自启（Windows）
+# shell:startup 目录放一个 .lnk 即可，无需管理员权限。目标固定为无窗口
+# 解释器（pythonw/打包 exe）+ --launcher --no-browser：开机后台拉起且不弹
+# 浏览器；launcher 检测到已运行实例时只打开页面，天然幂等。
+
+
+def autostart_lnk_path():
+    startup = os.path.join(
+        os.environ.get("APPDATA") or os.path.expanduser("~"),
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+    return os.path.join(startup, "总控台.lnk")
+
+
+def _autostart_pythonw():
+    """无窗口解释器路径；找不到 pythonw 时回退当前解释器。
+
+    依次找 sys.executable 同目录（常规安装）、sys.base_prefix（uv shim
+    等包装场景：可执行在跳板目录，真实安装的 pythonw 在 base_prefix）、
+    realpath 解析后的目录。
+    """
+    candidates = [os.path.dirname(sys.executable),
+                  sys.base_prefix,
+                  os.path.dirname(os.path.realpath(sys.executable))]
+    for base in candidates:
+        candidate = os.path.join(base, "pythonw.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return sys.executable
+
+
+def autostart_installed():
+    try:
+        return os.path.isfile(autostart_lnk_path())
+    except OSError:
+        return False
+
+
+def _run_powershell_checked(script):
+    """带退出码判定的 PowerShell 执行（_win_powershell 会吞掉退出码）。"""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command",
+             "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + script],
+            capture_output=True, timeout=SUBPROCESS_TIMEOUT)
+        return r.returncode == 0, r.stderr.decode("utf-8", errors="replace")
+    except Exception as e:
+        return False, str(e)
+
+
+def install_autostart():
+    """写入 shell:startup 快捷方式；返回 (ok, error)。"""
+    if not IS_WIN:
+        return False, "仅 Windows 支持开机自启"
+    if FROZEN:
+        target, args = sys.executable, "--launcher --no-browser"
+    else:
+        target = _autostart_pythonw()
+        args = '"%s" --launcher --no-browser' % os.path.abspath(__file__)
+    script = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        "$s = $ws.CreateShortcut(%s); "
+        "$s.TargetPath = %s; $s.Arguments = %s; "
+        "$s.WorkingDirectory = %s; $s.Description = '总控台开机自启'; "
+        "$s.Save()" % (
+            _win_quote(autostart_lnk_path()), _win_quote(target),
+            _win_quote(args), _win_quote(BASE_DIR)))
+    ok, error = _run_powershell_checked(script)
+    if not ok:
+        return False, "写入启动快捷方式失败: %s" % (error or "PowerShell 退出码非零")
+    return True, None
+
+
+def uninstall_autostart():
+    """删除 shell:startup 快捷方式；不存在视为成功（幂等）。"""
+    if not IS_WIN:
+        return False, "仅 Windows 支持开机自启"
+    lnk = autostart_lnk_path()
+    if os.path.isfile(lnk):
+        try:
+            os.remove(lnk)
+        except OSError as e:
+            return False, "移除启动快捷方式失败: %s" % e
+    return True, None
 
 
 def restart_helper(old_pid, preferred_port):
@@ -5070,6 +5181,15 @@ if __name__ == "__main__":
         sys.exit(run_win_anchor_subcommand(sys.argv))
     elif "--launcher" in sys.argv:
         launcher_main()
+    elif "--install-autostart" in sys.argv:
+        ok, error = install_autostart()
+        print("开机自启已安装：%s" % autostart_lnk_path() if ok
+              else "安装失败: %s" % error, flush=True)
+        sys.exit(0 if ok else 1)
+    elif "--uninstall-autostart" in sys.argv:
+        ok, error = uninstall_autostart()
+        print("开机自启已移除" if ok else "移除失败: %s" % error, flush=True)
+        sys.exit(0 if ok else 1)
     elif "--restart-helper" in sys.argv:
         index = sys.argv.index("--restart-helper")
         try:

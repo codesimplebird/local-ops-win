@@ -358,6 +358,55 @@ class WinAnchorDescendantTests(unittest.TestCase):
 
 
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
+class WinAutostartTests(unittest.TestCase):
+    def test_lnk_path_follows_appdata(self):
+        fake = r"C:\Users\x\AppData\Roaming"
+        with mock.patch.dict(os.environ, {"APPDATA": fake}):
+            path = server.autostart_lnk_path()
+            self.assertIn("AppData\\Roaming", path)
+            self.assertTrue(path.endswith(os.path.join(
+                "Microsoft", "Windows", "Start Menu",
+                "Programs", "Startup", "总控台.lnk")))
+
+    def test_install_writes_shortcut_via_powershell(self):
+        captured = {}
+
+        def fake_run(script):
+            captured["script"] = script
+            return True, None
+
+        with mock.patch.object(server, "_run_powershell_checked",
+                               side_effect=fake_run):
+            ok, error = server.install_autostart()
+        self.assertTrue(ok, error)
+        script = captured["script"]
+        self.assertIn("CreateShortcut", script)
+        # 固定语义：后台拉起 + 不弹浏览器 + 工作目录为项目根
+        self.assertIn("--launcher --no-browser", script)
+        self.assertIn(server.BASE_DIR, script)
+        self.assertIn("server.py", script)  # dev 形态目标带入口脚本
+
+    def test_install_reports_powershell_failure(self):
+        with mock.patch.object(server, "_run_powershell_checked",
+                               return_value=(False, "boom")):
+            ok, error = server.install_autostart()
+        self.assertFalse(ok)
+        self.assertIn("boom", error)
+
+    def test_uninstall_removes_link_idempotently(self):
+        with tempfile.TemporaryDirectory() as td:
+            lnk = os.path.join(td, "总控台.lnk")
+            open(lnk, "w", encoding="utf-8").close()
+            with mock.patch.object(server, "autostart_lnk_path",
+                                   return_value=lnk):
+                ok, error = server.uninstall_autostart()
+                self.assertTrue(ok, error)
+                self.assertFalse(os.path.exists(lnk))
+                ok, error = server.uninstall_autostart()  # 不存在：幂等成功
+                self.assertTrue(ok, error)
+
+
+@unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
 class WindowsProcessTests(unittest.TestCase):
     def test_pid_alive_detects_exit(self):
         proc = subprocess.Popen([sys.executable, "-c",
