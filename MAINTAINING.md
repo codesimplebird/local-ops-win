@@ -63,6 +63,7 @@ git merge origin/main
 ## 修改规范
 
 - 保持纯 Python 标准库,不引入第三方运行时依赖(上游 PR #3 的 pywin32/psutil 方案被明确否决;PyInstaller 仅构建期,已入 requirements-dev.txt)。
+- **前端改动必须浏览器实测**:node --check 与 check_project 的绑定检查只能抓语法/未绑定引用,抓不住 TDZ(模块级调用先于 const 声明)这类运行时错误——一旦某模块求值失败,整条 import 链(app.js 起)全灭,页面按钮全部无响应。实测方法:打开页面后控制台执行 `typeof window.__poll` 应为 `'function'`(模块链存活的全局哨兵),再点一遍新增交互。
 - Windows 进程管理改动注意三重校验语义:受控判定 = 锚点进程 + `console-run:<token>` 命令行标记 + PPID 后代树;停止先优雅 `taskkill /T`,失败才升级 `/F`;绝不按端口杀进程。
 - 进程全量快照走 `_win_process_table()`(1.2s TTL 缓存,`fresh=True` 绕过);写路径(启停校验)必须用即时表。
 - 数据目录 `%APPDATA%\总控台`,日志 `%LOCALAPPDATA%\总控台\Logs`,可用 `CONSOLE_DATA_DIR`/`CONSOLE_LOG_DIR` 覆盖。

@@ -257,7 +257,6 @@ function setModalKind(kind) {
 kindRow.querySelectorAll('.kind-btn').forEach(b =>
   b.addEventListener('click', () => setModalKind(b.dataset.kind)));
 presetSearch.addEventListener('input', () => renderServicePresets(presetSearch.value));
-renderServicePresets('');
 
 export function openAppModal(app, presetKind, focusAction = '') {
   editingAppId = app ? app.id : null;
@@ -367,6 +366,7 @@ function renderServicePresets(filter) {
     presetList.appendChild(empty);
   }
 }
+renderServicePresets('');  // 初始化必须在 SERVICE_PRESETS 声明之后（TDZ）
 
 function applyDetectedCandidate(candidate, option) {
   const previousAutoPort = detectedPortValue == null ? '' : String(detectedPortValue);
