@@ -58,6 +58,7 @@ git merge origin/main
 3. **netstat 解析**:按列位置解析、不读表头,中文/非英文系统表头本地化无影响;IPv6 分区索引(`[fe80::1%12]`)与非数字 PID 均已处理。`run_cmd` 用 `errors="replace"` 解码,GBK 输出安全。
 4. **PID 复用幽灵成员(1.1.0)**:孤儿进程 ppid 常指向已退出进程,PID 值被受管树成员复用时被误纳入成员表,「停止」等待被无关长命进程拖到超时。`_win_tree_of` 现按「后代创建时间不得早于父进程」过滤(任一侧时间不可解析保守保留)。taskkill 按真实 OS 树执行,本就不会误杀。
 5. **受保护进程所有者判定(1.1.0)**:lsass 等 PPL 进程 OpenProcess 任何访问权都被拒,存活判定不能用 `pid_alive`,改用 CIM 进程表(跨用户可读)。提升权限的用户进程(ctypes 读不出所有者)由后台 CIM GetOwner 批量补查记忆化,不能直接当非本用户过滤。
+6. **锚点批处理编码(1.1.0 发布当天)**:Python 开启 UTF-8 模式(uv 解释器)时 `locale.getpreferredencoding` 返回 UTF-8,而 cmd 解析 .cmd 永远走系统 ANSI 代码页——中文路径被读成乱码报 exit 9009。锚点批处理固定用 `mbcs` 写入。同理:`start.bat` 必须纯 ASCII + CRLF(cmd 按 ANSI 解析,.gitattributes 已强制 `.bat/.cmd` eol=crlf);非中文代码页系统上中文路径批处理 cmd 本身无法执行,产品按 errors=replace 降级。
 
 ## 修改规范
 
