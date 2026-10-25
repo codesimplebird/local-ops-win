@@ -209,6 +209,40 @@ class WindowsParsingTests(unittest.TestCase):
                     self.assertEqual(server.command_for_script(path), expected)
 
 
+    def test_win_process_owner_self(self):
+        domain, user = server._win_process_owner(os.getpid())
+        self.assertEqual(user, os.environ.get("USERNAME"))
+        self.assertEqual(domain, os.environ.get("USERDOMAIN"))
+        # 非法 pid：OpenProcess 失败 → ("", "")，不抛异常
+        self.assertEqual(server._win_process_owner(0), ("", ""))
+        self.assertEqual(server._win_process_owner(-1), ("", ""))
+
+    def test_win_listener_owners_and_filter(self):
+        owners = server._win_listener_owners({os.getpid(), 0, -3, "x"})
+        self.assertEqual(set(owners), {os.getpid()})
+        self.assertEqual(owners[os.getpid()],
+                         (os.environ.get("USERDOMAIN"),
+                          os.environ.get("USERNAME")))
+        current = ("DESKTOP-AB", "dev")
+        fake = {100: ("DESKTOP-AB", "dev"),
+                200: ("NT AUTHORITY", "SYSTEM"),
+                300: ("", "")}  # 存活但所有者不可读（SYSTEM/受保护）→ 落选
+        self.assertEqual(
+            server._win_filter_own_pids({100, 200, 300}, fake, current),
+            {100})
+        # owners 缺失的 pid（所有者未知，如查询瞬间已退出）不过滤
+        self.assertEqual(
+            server._win_filter_own_pids({100, 200, 400}, fake, current),
+            {100, 400})
+        # owners 为 None 或当前用户名缺失：退化为不过滤
+        self.assertEqual(
+            server._win_filter_own_pids({100, 200, 300}, None, current),
+            {100, 200, 300})
+        self.assertEqual(
+            server._win_filter_own_pids({100, 200, 300}, fake, ("D", None)),
+            {100, 200, 300})
+
+
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
 class WinProcTableCacheTests(unittest.TestCase):
     """进程表 TTL 缓存：单飞复用、失败不缓存、fresh 直通。"""

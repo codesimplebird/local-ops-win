@@ -59,6 +59,23 @@ if sys.platform == "win32":
     _NTDLL.NtQueryInformationProcess.argtypes = [
         wintypes.HANDLE, wintypes.ULONG, wintypes.LPVOID,
         wintypes.ULONG, ctypes.c_void_p]
+    _KERNEL32.LocalFree.restype = wintypes.HLOCAL
+    _KERNEL32.LocalFree.argtypes = [wintypes.HLOCAL]
+    _ADVAPI32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    _ADVAPI32.GetSecurityInfo.restype = wintypes.DWORD
+    _ADVAPI32.GetSecurityInfo.argtypes = [
+        wintypes.HANDLE, wintypes.INT, wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p)]
+    _ADVAPI32.LookupAccountSidW.restype = wintypes.BOOL
+    _ADVAPI32.LookupAccountSidW.argtypes = [
+        wintypes.LPCWSTR, ctypes.c_void_p,
+        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD)]
+    _WIN_SE_KERNEL_OBJECT = 6        # GetSecurityInfo 的进程对象类型
+    _WIN_OWNER_SECURITY_INFO = 0x1   # 只读所有者 SID
 else:  # pragma: no cover - macOS
     ctypes = None
     wintypes = None
@@ -767,6 +784,166 @@ def _win_table_history():
                 max(0.0, _WIN_TABLE_CACHE["mono"] - _WIN_TABLE_CACHE["prev_mono"]))
 
 
+# ---------------------------------------------------------------- 进程所有者
+# Windows 无数字 uid（快照统一置 0），服务监控的「当前用户」过滤改按进程
+# 令牌所有者的 (Domain, User) 判定，等价 macOS 的 uid 过滤，svchost 等
+# SYSTEM 服务不再进入服务监控。
+#
+# 两级读取：ctypes（OpenProcess+GetSecurityInfo+LookupAccountSid）毫秒级
+# 覆盖普通进程；提升权限/受保护进程（如以管理员运行的 dev server、lsass）
+# 句柄读取被拒，改由后台线程批量 CIM GetOwner 补查并按 (pid, 创建时间)
+# 记忆化——只在新 pid 出现时查一次。补查落地前按「未知」处理并显示，
+# 绝不因读取失败隐藏可能是当前用户的服务。
+
+
+def _win_current_owner():
+    """当前用户身份 (domain, user)；缺失侧为 None。"""
+    return (os.environ.get("USERDOMAIN"), os.environ.get("USERNAME"))
+
+
+def _win_process_owner(pid):
+    """进程所有者 (domain, user)；任何一步失败返回 ("", "")。"""
+    READ_CONTROL = 0x00020000
+    handle = _KERNEL32.OpenProcess(READ_CONTROL, False, int(pid))
+    if not handle:
+        return ("", "")
+    try:
+        sid = ctypes.c_void_p()
+        sd = ctypes.c_void_p()
+        if _ADVAPI32.GetSecurityInfo(
+                handle, _WIN_SE_KERNEL_OBJECT, _WIN_OWNER_SECURITY_INFO,
+                ctypes.byref(sid), None, None, None,
+                ctypes.byref(sd)) != 0 or not sd.value:
+            return ("", "")
+        name = ctypes.create_unicode_buffer(256)
+        domain = ctypes.create_unicode_buffer(256)
+        cch_name = wintypes.DWORD(256)
+        cch_domain = wintypes.DWORD(256)
+        sid_use = wintypes.DWORD(0)
+        if not _ADVAPI32.LookupAccountSidW(
+                None, sid, name, ctypes.byref(cch_name),
+                domain, ctypes.byref(cch_domain), ctypes.byref(sid_use)):
+            return ("", "")
+        return (domain.value, name.value)
+    finally:
+        if sd.value:
+            _KERNEL32.LocalFree(sd)
+        _KERNEL32.CloseHandle(handle)
+
+
+def _parse_win_owners_json(text):
+    """CIM GetOwner 批量查询输出 → {pid: (domain, user)}；解析失败返回空 dict。"""
+    if not text or not text.strip():
+        return {}
+    try:
+        items = json.loads(text)
+    except ValueError:
+        return {}
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return {}
+    owners = {}
+    for item in items:
+        try:
+            pid = int(item.get("ProcessId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0:
+            owners[pid] = (item.get("Domain") or "", item.get("User") or "")
+    return owners
+
+
+_WIN_OWNER_FALLBACK_LOCK = threading.Lock()
+_WIN_OWNER_FALLBACK = {"cache": {}, "busy": False}  # pid -> (created, domain, user)
+
+
+def _win_owner_fallback_worker(pids, created_map):
+    """后台批量补查句柄读不出的进程所有者，写入记忆化缓存。"""
+    pid_list = "@(%s)" % ",".join(str(p) for p in sorted(pids))
+    script = (
+        "$pids = %s; "
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $pids -contains $_.ProcessId } | ForEach-Object { "
+        "$o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner; "
+        "[PSCustomObject]@{ ProcessId = $_.ProcessId; "
+        "Domain = if ($o) { $o.Domain } else { $null }; "
+        "User = if ($o) { $o.User } else { $null } } } | "
+        "ConvertTo-Json -Compress" % pid_list)
+    text = _win_powershell(script)
+    fetched = _parse_win_owners_json(text)  # 失败为空 dict：下次再查，不写负缓存
+    with _WIN_OWNER_FALLBACK_LOCK:
+        for pid in pids:
+            if pid in fetched:
+                domain, user = fetched[pid]
+                _WIN_OWNER_FALLBACK["cache"][pid] = (
+                    created_map.get(pid), domain, user)
+
+
+def _win_schedule_owner_fallback(pids, created_map):
+    """为补查集合启动单个后台线程；已在跑则留待下一轮。"""
+    with _WIN_OWNER_FALLBACK_LOCK:
+        if _WIN_OWNER_FALLBACK["busy"]:
+            return
+        _WIN_OWNER_FALLBACK["busy"] = True
+    pids = set(pids)
+    created_map = dict(created_map)
+
+    def _run():
+        try:
+            _win_owner_fallback_worker(pids, created_map)
+        except Exception:
+            LOG.exception("进程所有者补查失败")
+        finally:
+            with _WIN_OWNER_FALLBACK_LOCK:
+                _WIN_OWNER_FALLBACK["busy"] = False
+    threading.Thread(target=_run, daemon=True,
+                     name="win-owner-fallback").start()
+
+
+def _win_listener_owners(pids):
+    """监听 pid 集合 → {pid: (domain, user)}；无法判定的进程不入结果。
+
+    不入结果的 pid（查询瞬间已退出/补查未落地）调用方按未知处理并显示。
+    """
+    owners = {}
+    wanted = {pid for pid in pids if isinstance(pid, int) and pid > 0}
+    if not wanted:
+        return owners
+    table = _win_process_table()
+    fallback_needed = {}
+    for pid in wanted:
+        domain_user = _win_process_owner(pid)
+        if domain_user != ("", ""):
+            owners[pid] = domain_user
+            continue
+        created = (table.get(pid) or {}).get("created")
+        if pid not in table:
+            continue  # 查询瞬间已退出：未知
+        with _WIN_OWNER_FALLBACK_LOCK:
+            cached = _WIN_OWNER_FALLBACK["cache"].get(pid)
+        if cached is not None and cached[0] == created:
+            owners[pid] = (cached[1], cached[2])
+        else:
+            fallback_needed[pid] = created
+    if fallback_needed:
+        _win_schedule_owner_fallback(fallback_needed, fallback_needed)
+    return owners
+
+
+def _win_filter_own_pids(candidates, owners, current_owner):
+    """candidates 中属于当前用户的 pid 集合。
+
+    owners 缺失的 pid（所有者未知）不过滤；owners 为 None 或当前用户名
+    缺失时整体不过滤，维持旧行为。
+    """
+    if owners is None or not current_owner[1]:
+        return set(candidates)
+    domain, user = current_owner
+    return {pid for pid in candidates
+            if pid not in owners or owners[pid] == (domain, user)}
+
+
 def _win_cpu_percent(prev, cur, dt_wall, cores):
     """两次快照的 User/KernelModeTime（100ns 整型）差值 → CPU 百分比。
 
@@ -1458,9 +1635,20 @@ def build_services(cfg, groups=None):
     """返回 (services, listeners)。只含当前用户进程，排除控制台自身。"""
     listeners = scan_listeners()
     snap = ps_snapshot({pid for pid, _ in listeners}, with_uid=True)
+    owner_allowed = None
+    if IS_WIN:
+        # Windows 无数字 uid：按进程所有者 (Domain, User) 过滤当前用户，
+        # SYSTEM/其他账户的服务（svchost 等）不进服务监控
+        owner_allowed = _win_filter_own_pids(
+            {pid for pid, _ in listeners if pid != SELF_PID},
+            _win_listener_owners(
+                {pid for pid, _ in listeners
+                 if pid != SELF_PID and pid in snap}),
+            _win_current_owner())
     mine_pids = [pid for pid, _ in listeners
                  if pid != SELF_PID and pid in snap
-                 and snap[pid].get("uid") == SELF_UID]
+                 and snap[pid].get("uid") == SELF_UID
+                 and (owner_allowed is None or pid in owner_allowed)]
     cwds = lsof_cwds(mine_pids)
     origin_table = origin_snapshot()
 
@@ -1478,6 +1666,8 @@ def build_services(cfg, groups=None):
             continue
         info = snap.get(pid)
         if not info or info.get("uid") != SELF_UID:
+            continue
+        if owner_allowed is not None and pid not in owner_allowed:
             continue
         comm = info.get("comm") or ""
         args = info.get("args") or comm
