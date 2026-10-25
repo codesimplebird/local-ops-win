@@ -44,25 +44,30 @@ git merge origin/main
 
 ## 测试基线
 
-- 全量 176 个测试,本机预期:**0 失败、13 跳过、3 个 ERROR**。
+- 全量 193 个测试，本机预期:**0 失败、13 跳过、3 个 ERROR**。
 - 3 个 ERROR 全部是符号链接测试(`test_symlink_*`):创建符号链接需要开发者模式或管理员特权,普通环境必然失败,属环境限制而非代码缺陷。开启系统"开发者模式"后可归零。
+- `python tools/check_project.py` 本机同样因这 3 个符号链接 ERROR 计为失败（12 项检查中其余通过）；CI 的 Windows runner 以管理员运行可建符号链接，是绿的。
 - `tests/test_windows.py` 是 Windows 专属测试(解析器纯函数 + 真实进程生命周期);涉及 Windows 的改动必须在这里补回归测试。
+- 构建 exe 需 PyInstaller（PEP 668 环境用独立 venv）：`python -m venv %TEMP%\console-build-venv && .../Scripts/python -m pip install pyinstaller`，然后以该 venv 的 python 运行 `tools/build_exe.py`。
 
 ## 已修复的 Windows 专属问题(改动时别回退)
 
-1. **`--launcher` 崩溃(OSError 9)**:`redirect_console_output` 在标准句柄缺失(pythonw、隐藏窗口启动)时,`os.open` 会占用刚腾空的 fd 1/2,`dup2` 变自别名空操作、`finally` 误关标准句柄。现先 dup 两次腾挪到高位,并对 `msvcrt.setmode(1/2)` 加守卫;`sys.stdout` 为 None 时重建输出流。
+1. **`--launcher` 崩溃(OSError 9)**:`redirect_console_output` 在标准句柄缺失(pythonw、隐藏窗口启动)时,`os.open` 会占用刚腾空的 fd 1/2,`dup2` 变自别名空操作、`finally` 误关标准句柄。现先 dup 两次腾挪到高位,并对 `msvcrt.setmode(1/2)` 加守卫;`sys.stdout` 为 None 时重建输出流。打包形态(`--noconsole`)入口无条件重定向。
 2. **PS 5.1 下 uptime 恒为 0**:Windows PowerShell 5.1 的 `ConvertTo-Json` 把 CIM DateTime 序列化为 `/Date(<epoch-ms>)/`,旧解析器只认 ISO/DMTF。`_win_parse_creation` 现覆盖三种格式;DMTF 时区后缀单位是分钟(`+480` = UTC+8),按带时区换算、不依赖本机时区。
 3. **netstat 解析**:按列位置解析、不读表头,中文/非英文系统表头本地化无影响;IPv6 分区索引(`[fe80::1%12]`)与非数字 PID 均已处理。`run_cmd` 用 `errors="replace"` 解码,GBK 输出安全。
+4. **PID 复用幽灵成员(1.1.0)**:孤儿进程 ppid 常指向已退出进程,PID 值被受管树成员复用时被误纳入成员表,「停止」等待被无关长命进程拖到超时。`_win_tree_of` 现按「后代创建时间不得早于父进程」过滤(任一侧时间不可解析保守保留)。taskkill 按真实 OS 树执行,本就不会误杀。
+5. **受保护进程所有者判定(1.1.0)**:lsass 等 PPL 进程 OpenProcess 任何访问权都被拒,存活判定不能用 `pid_alive`,改用 CIM 进程表(跨用户可读)。提升权限的用户进程(ctypes 读不出所有者)由后台 CIM GetOwner 批量补查记忆化,不能直接当非本用户过滤。
 
 ## 修改规范
 
-- 保持纯 Python 标准库,不引入第三方运行时依赖(上游 PR #3 的 pywin32/psutil 方案被明确否决)。
+- 保持纯 Python 标准库,不引入第三方运行时依赖(上游 PR #3 的 pywin32/psutil 方案被明确否决;PyInstaller 仅构建期,已入 requirements-dev.txt)。
 - Windows 进程管理改动注意三重校验语义:受控判定 = 锚点进程 + `console-run:<token>` 命令行标记 + PPID 后代树;停止先优雅 `taskkill /T`,失败才升级 `/F`;绝不按端口杀进程。
+- 进程全量快照走 `_win_process_table()`(1.2s TTL 缓存,`fresh=True` 绕过);写路径(启停校验)必须用即时表。
 - 数据目录 `%APPDATA%\总控台`,日志 `%LOCALAPPDATA%\总控台\Logs`,可用 `CONSOLE_DATA_DIR`/`CONSOLE_LOG_DIR` 覆盖。
 
 ## 后续待办(优先级从高到低)
 
-1. 打包发布:PyInstaller onedir 或 zip + `start.bat`,可参考上游 PR #3 的可复现构建清单。
-2. 开机自启安装脚本(计划任务或 `shell:startup` 快捷方式,替代手动放 vbs)。
-3. 性能:`/api/state` 每 2 秒轮询会起多个子进程(netstat/CIM),可做监听缓存与增量采样。
-4. 服务列表可考虑加当前用户过滤,减少 SYSTEM 服务噪音(上游 macOS 版行为)。
+1. 自动更新检查(GitHub Release 比对 + 提示,不做静默自更新)。
+2. exe 代码签名(SmartScreen 提示消除,需要证书,暂缓)。
+3. `/api/state` 进一步增量采样(当前稳态每轮 1 个 PowerShell + 1 个 netstat,已够用)。
+4. 关注进程(watched)列表同样按所有者过滤(当前仅服务监控过滤)。

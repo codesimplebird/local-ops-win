@@ -94,6 +94,7 @@
 - `POST /api/console/restart` → `{ok, pid, helperPid, port}`（先返回响应，再由独立 helper 等待旧进程退出并优先复用原端口；启动台应用不随总控台停止）
 - `POST /api/console/stop` → `{ok, pid, port}`（响应发出后关闭总控台 HTTP 服务；启动台中已经运行的独立进程组保持运行）
 - `POST /api/ui/theme` `{theme}` → `{ok, theme}` / `{ok:false, error}`（校验主题 id 存在后写入 `config.json` 的 `uiTheme`；主题清单由 `/api/state` 的 `themes` 字段返回）
+- `POST /api/autostart` `{enabled: bool}` → `{ok, enabled, installed}`（仅 Windows；在 `shell:startup` 建/删无窗口快捷方式，幂等；非布尔 `enabled` 返回 400）。`/api/state` 的 `autostartInstalled` 反映当前状态（os.path 检查零开销）
 
 ### 静态
 `GET /` → `static/index.html`；`/app.js`、`/js/*`、`/themes/*`、`/assets/*`、`/fonts/*` 等映射 `static/`；`/icons/xxx` → Application Support 的 `icons/xxx`。防路径穿越。
@@ -102,7 +103,7 @@
 
 - **平台适配层**：macOS 与 Windows 共用全部上层逻辑，平台差异收敛在少量同签名函数里（`IS_WIN` 分支）：扫描（`lsof`/`ps` ↔ `netstat`/PowerShell CIM）、受控进程模型（pgid ↔ PPID 后代树 + `tools/win_anchor.py` 锚点）、停止（`killpg` ↔ `taskkill /T[/F]`）、存活判定（`os.kill(pid,0)` ↔ OpenProcess+GetExitCodeProcess）、cwd（lsof ↔ PEB 读取）、文件选择框（osascript ↔ PowerShell WinForms）、实例锁（flock ↔ msvcrt.locking）、数据目录（`~/Library/...` ↔ `%APPDATA%`/`%LOCALAPPDATA%`）。修改平台相关代码时须保证两平台语义等价并在两平台跑测试。
 - **端口扫描**：`lsof -iTCP -sTCP:LISTEN -P -n`（Windows：`netstat -ano -p tcp`），按 `(pid, port)` 去重（IPv4/6 重复行）。lsof 的 COMMAND 列会截断，名称以 ps 的 comm 为准。
-- **进程详情**：批量 `ps -o pid=,user=,comm=,args=,%cpu=,%mem=,etime= -p <逗号分隔pid>`；只保留 `user == 当前用户`。
+- **进程详情**：批量 `ps -o pid=,user=,comm=,args=,%cpu=,%mem=,etime= -p <逗号分隔pid>`；只保留 `user == 当前用户`。Windows：全量快照走 `_win_process_table()`（PowerShell CIM，1.2s TTL 缓存供全链共享，写路径 `fresh=True` 取即时表）；CPU% 由连续两次快照的 User/KernelModeTime 差值推算（全部核心归一）；「当前用户」按进程所有者过滤（ctypes 优先，提升权限/受保护进程后台 CIM GetOwner 补查记忆化，所有者未知不过滤）；`_win_tree_of` 按创建时间防 PID 复用幽灵成员。
 - **cwd**：`lsof -a -p <逗号分隔pid> -d cwd -Fn`，解析 `n` 行。
 - **etime 解析**：`[[dd-]hh:]mm:ss` → 秒。
 - **分组逻辑**（按优先级）：用户 `promoted` → `mine`；进程名含开发关键词（python node ollama docker 等，见 `DEV_KEYWORDS`，只匹配 name 不匹配 args，避免 VS Code `--ms-enable-electron-run-as-node` 这类误伤）→ `mine`（覆盖下方规则，Ollama/Docker 这类在 .app 内的守护进程仍算服务）；可执行路径含 `.app/Contents/`（GUI 应用及其 helper）→ `background`；comm 以系统路径开头（`/usr/libexec/`、`/usr/sbin/`、`/sbin/`、`/System/`、`/usr/lib/`）→ `background`；comm 或 cwd 含 `/Library/Containers/`（沙盒应用）→ `background`；其余默认 `mine`。`hidden` 仅是标记，照常返回。

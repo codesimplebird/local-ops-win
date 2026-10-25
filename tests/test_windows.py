@@ -360,10 +360,10 @@ class WinAnchorDescendantTests(unittest.TestCase):
 @unittest.skipIf(not server.IS_WIN, "Windows 适配层专属测试")
 class WinAutostartTests(unittest.TestCase):
     def test_lnk_path_follows_appdata(self):
-        fake = r"C:\Users\x\AppData\Roaming"
+        fake = r"C:\FakeRoam"
         with mock.patch.dict(os.environ, {"APPDATA": fake}):
             path = server.autostart_lnk_path()
-            self.assertIn("AppData\\Roaming", path)
+            self.assertIn("FakeRoam", path)
             self.assertTrue(path.endswith(os.path.join(
                 "Microsoft", "Windows", "Start Menu",
                 "Programs", "Startup", "总控台.lnk")))

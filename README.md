@@ -45,6 +45,22 @@
 
 启动后自动打开 `http://127.0.0.1:9600`，被占则尝试 9601–9609。实际地址看顶栏「重启 :9600」按钮，或终端输出 / `~/Library/Logs/总控台/console.log`。
 
+### Windows：独立包与开机自启
+
+- **独立包（免 Python 安装）**：从 Release 页下载 `Console-win64-<版本>.zip`
+  （附 SHA-256），解压到任意目录后双击 `Console\Console.exe` 即可运行；
+  目录内已捆绑运行所需的全部资源，不需要安装 Python。校验：
+  `certutil -hashfile Console-win64-<版本>.zip SHA256`。
+  SmartScreen 首次可能提示「未知发布者」——点「更多信息 → 仍要运行」
+  （独立包未做代码签名，这是无签名本地工具的常规提示）。
+- **开机自启**：两种方式任选——
+  命令行 `Console.exe --install-autostart`（移除用 `--uninstall-autostart`），
+  或在页面「设置中心」打开「开机自启」开关。实现是在当前用户的
+  `shell:startup` 放一个无窗口快捷方式（不需要管理员权限），登录后
+  后台拉起、不弹浏览器；已在运行时只会打开页面，可放心重复执行。
+- 也可继续使用源码方式运行（需要 Python 3.12）：见上表 `start.bat` /
+  `py -3 server.py`；源码方式同样支持开机自启。
+
 ## Windows 适配说明
 
 总控台在 Windows 上以等价语义运行，平台差异如下：
@@ -58,8 +74,10 @@
   （仅对带窗口进程有效），失败自动升级为 `taskkill /T /F` 强制结束整棵
   进程树。因此被停止的应用不会收到优雅退出通知，正在写入的数据可能丢失。
 - **进程扫描**：`lsof`/`ps` 换成 `netstat -ano -p tcp` 与
-  PowerShell `Get-CimInstance Win32_Process`；CPU% 在 Windows 上
-  暂不提供（置 0），内存使用 WorkingSet 占比。
+  PowerShell `Get-CimInstance Win32_Process`；CPU% 由连续两次快照的
+  CPU 时间差推算（按全部核心归一），内存使用 WorkingSet 占比。
+  快照带 1.2s 缓存供全链共享，服务监控只显示当前用户拥有的进程
+  （svchost 等 SYSTEM 服务不混入）。
 - **工作目录读取**：通过 `NtQueryInformationProcess` 读 PEB（ctypes，
   只读）；同架构进程可读，被拒绝访问时该进程不显示目录。
 - **文件选择框**：PowerShell + WinForms 原生对话框（目录/文件）。

@@ -8,10 +8,12 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-25
+
 ### Added
 
 - **Windows 10/11 适配**：后端可在 Windows 上完整运行（Python 3.12 标准库）。
-  - 进程扫描改用 `netstat -ano -p tcp` 与 PowerShell `Get-CimInstance`（CPU% 暂置 0，内存用 WorkingSet 占比）。
+  - 进程扫描改用 `netstat -ano -p tcp` 与 PowerShell `Get-CimInstance`（内存用 WorkingSet 占比）。
   - 受控进程模型改为「锚点进程 + 随机 token 命令行 + PPID 后代树」：`tools/win_anchor.py` 以临时 `.cmd` 批处理执行用户命令，等整棵进程树清空后以原退出码退出，等价于 macOS 的 bash 包装语义。
   - 停止应用用 `taskkill /T`（先优雅、失败自动升级 `/F` 树杀）；`pid_alive` 改用 OpenProcess + GetExitCodeProcess（`os.kill(pid,0)` 在 Windows 上对已退出进程仍返回成功）。
   - 实例锁改用 `msvcrt.locking` 回退（fcntl 仅 POSIX）；数据目录默认 `%APPDATA%\总控台` 与 `%LOCALAPPDATA%\总控台\Logs`。
@@ -20,6 +22,8 @@
   - `/api/state` 与 `/api/health` 增加 `platform` 字段，前端重启/停止提示按平台显示启动器名。
   - 新增 `tests/test_windows.py`（Windows 专属解析与真实生命周期测试），macOS 专属测试在 Windows 上显式跳过；CI 增加 Windows 检查 job（含真实启动冒烟测试）。
   - 项目检查在 Windows 上跳过 bash/plutil 检查（Info.plist 改用 plistlib 校验），并兼容 node 24 的 `--test` 输出格式。
+- **Windows 独立发行包**：`tools/build_exe.py` 用 PyInstaller（仅构建期依赖，运行时仍纯标准库）产出免 Python 安装的 onedir 包（`Console.exe` + 静态资源，zip + SHA-256）；CI 新增 windows-package job 对打包产物做解包冒烟。资源与源码树同构铺设在 exe 同目录，打包/开发两种形态共用同一份锚点脚本。
+- **开机自启（Windows）**：`--install-autostart` / `--uninstall-autostart` 与设置中心「开机自启」开关，在 `shell:startup` 建/删无窗口快捷方式（pythonw + `--launcher --no-browser`），登录后后台拉起、不弹浏览器、幂等；`POST /api/autostart` 走既有跨站防护通道，`/api/state` 增加 `autostartInstalled`。
 - 项目启动识别增加 Poetry 支持；检测到 `poetry.lock` 时，Python Web 项目候选命令使用 `poetry run`（Windows 社区版同步合入，并保留 `python`/`python3` 平台适配与 uv 支持）。
 - 顶栏新增 GitHub 仓库图标按钮，点击在新标签页打开项目源码仓库。
 - 增加用户/开发文档、备份恢复和升级卸载指南。
@@ -40,6 +44,9 @@
 
 ### Changed
 
+- **Windows 轮询性能收敛**：全量进程快照（PowerShell CIM）加 1.2s TTL 缓存并供受管识别/进程详情/来源溯源/关注进程共享，稳态每轮轮询从 4 个相同快照减为 1 个；系统总内存改 ctypes `GlobalMemoryStatusEx` 直读；受管进程树只为应用锚点构建（此前为全系统每个进程各建一棵）；锚点后代探测改 ctypes Toolhelp 快照（此前每 2 秒一个 PowerShell 全量查询）。
+- **真实 CPU%（Windows）**：由连续两次快照的 User/KernelModeTime 差值推算（100ns 整型、按全部逻辑核心归一、上限 100），服务表格与 KPI 火花线显示真实占用（此前恒为 0）。
+- **服务监控按真实用户过滤（Windows）**：按进程所有者过滤（ctypes 毫秒级优先；提升权限/受保护进程由后台 CIM 批量补查并记忆化），svchost 等 SYSTEM 服务不再混入服务监控；所有者未知的进程保持显示，绝不因读取失败隐藏可能是当前用户的服务。
 - README 精简为「快速开始 / 使用 / 参与贡献」入口，完整的使用手册、数据与备份、故障排查和开发者指南迁往仓库 Wiki。
 - 默认将配置/图标移至 `~/Library/Application Support/总控台`，日志移至 `~/Library/Logs/总控台`。新目标不存在时仅首次复制旧 `data/`，不删除原文件。
 - `config.json.bak` 现保留修改前的上一份良好配置，而不是与主配置相同的副本。
@@ -55,6 +62,9 @@
 
 ### Fixed
 
+- 修复 Windows 上 PID 复用把无关孤儿进程误纳入受管成员表、导致「停止」被长命进程拖到超时的问题（受管树按「后代创建时间不得早于父进程」过滤；taskkill 按真实 OS 树执行本就不受影响，无误杀风险）。
+- 修复 Windows PowerShell 5.1 下所有进程 uptime 恒为 0 的问题（`ConvertTo-Json` 把创建时间序列化为 `/Date(毫秒)/`，旧解析器只认 ISO/DMTF；现覆盖三种格式并按 DMTF 分钟制时区正确换算）。
+- 修复 `--launcher` 在标准句柄缺失（pythonw / 隐藏窗口启动）时崩溃的问题（OSError 9：句柄重定向自别名空操作 + 收尾误关标准句柄）。
 - 修复从服务监控加入启动台时只创建卡片、未认领来源进程的问题；创建与进程认领现由后端原子完成，项目命令识别完成前不能提前保存。明确认领的服务在 Next/Vite 等框架重建监听子进程、PID 变化后，会按端口、当前用户与真实项目目录唯一重新关联。
 - 修复 Candy 主题超大标题的英文粗体描边出现双重轮廓，并让英文副标题在窄屏明确换行。
 - 修复批处理脚本内取消被误报为运行成功，以及任务成功退出被诊断成“服务过早退出”。
