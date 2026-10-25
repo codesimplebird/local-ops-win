@@ -979,22 +979,23 @@ def _win_cpu_percent(prev, cur, dt_wall, cores):
     return round(min(seconds / (dt_wall * max(1, cores)) * 100.0, 100.0), 1)
 
 
-class _WinMemoryStatusEx(ctypes.Structure):
-    _fields_ = [
-        ("dwLength", wintypes.DWORD),
-        ("dwMemoryLoad", wintypes.DWORD),
-        ("ullTotalPhys", ctypes.c_ulonglong),
-        ("ullAvailPhys", ctypes.c_ulonglong),
-        ("ullTotalPageFile", ctypes.c_ulonglong),
-        ("ullAvailPageFile", ctypes.c_ulonglong),
-        ("ullTotalVirtual", ctypes.c_ulonglong),
-        ("ullAvailVirtual", ctypes.c_ulonglong),
-        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-    ]
+if IS_WIN:
+    class _WinMemoryStatusEx(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", wintypes.DWORD),
+            ("dwMemoryLoad", wintypes.DWORD),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
 
-
-_KERNEL32.GlobalMemoryStatusEx.restype = wintypes.BOOL
-_KERNEL32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_WinMemoryStatusEx)]
+    _KERNEL32.GlobalMemoryStatusEx.restype = wintypes.BOOL
+    _KERNEL32.GlobalMemoryStatusEx.argtypes = [
+        ctypes.POINTER(_WinMemoryStatusEx)]
 
 
 def _win_total_memory_kb():
