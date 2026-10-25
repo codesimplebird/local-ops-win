@@ -7,3 +7,5 @@
 *.png binary
 *.webp binary
 *.woff2 binary
+*.bat text eol=crlf
+*.cmd text eol=crlf
