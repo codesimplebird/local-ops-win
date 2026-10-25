@@ -2,7 +2,7 @@
 
 **Preview / Alpha · 源码预览**
 
-> 本仓库是 [laogou717/local-ops](https://github.com/laogou717/local-ops) 的社区 Windows 衍生版,基于 [dontpanic1 的双平台适配分支](https://github.com/dontpanic1/local-ops/tree/windows-support)(即上游 PR #2)建立,在同一份代码上运行 macOS 与 Windows。MIT 许可证,版权归原项目及贡献者所有。上游通过 `origin` remote 跟踪,Windows 特有问题的修复与维护在本仓库进行;维护方式见 [MAINTAINING.md](MAINTAINING.md)。
+> 本仓库是 [laogou717/local-ops](https://github.com/laogou717/local-ops) 的社区 Windows 衍生版,基于 [dontpanic1 的双平台适配分支](https://github.com/dontpanic1/local-ops/tree/windows-support)(即上游 PR #2)建立,在同一份代码上运行 macOS 与 Windows。MIT 许可证,版权归原项目及贡献者所有。上游通过 `upstream` remote 跟踪,Windows 特有问题的修复与维护在本仓库进行;维护方式见 [MAINTAINING.md](MAINTAINING.md)。
 
 总控台是一个面向本地的服务与批处理任务快速启动、运行监测工具。它把常用项目命令、长期服务和一次性批处理任务集中到本地网页中，并用 Python 3 标准库提供只绑定回环地址的后端；前端是无构建、无 CDN 的原生 HTML/CSS/JavaScript。
 

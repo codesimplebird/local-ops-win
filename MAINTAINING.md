@@ -6,7 +6,8 @@
 
 | Remote | 指向 | 用途 |
 | --- | --- | --- |
-| `origin` | laogou717/local-ops | 上游,定期合并同步 |
+| `origin` | codesimplebird/local-ops-win | 本仓库（Windows 社区版发布仓），v1.1.0 起在此发布 Release |
+| `upstream` | laogou717/local-ops | 上游,定期合并同步 |
 | `dontpanic` | dontpanic1/local-ops | Windows 适配原始来源,仅追溯用 |
 
 本仓库自己的长期分支是 `main`。
