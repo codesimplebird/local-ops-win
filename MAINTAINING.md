@@ -59,6 +59,8 @@ git merge origin/main
 4. **PID 复用幽灵成员(1.1.0)**:孤儿进程 ppid 常指向已退出进程,PID 值被受管树成员复用时被误纳入成员表,「停止」等待被无关长命进程拖到超时。`_win_tree_of` 现按「后代创建时间不得早于父进程」过滤(任一侧时间不可解析保守保留)。taskkill 按真实 OS 树执行,本就不会误杀。
 5. **受保护进程所有者判定(1.1.0)**:lsass 等 PPL 进程 OpenProcess 任何访问权都被拒,存活判定不能用 `pid_alive`,改用 CIM 进程表(跨用户可读)。提升权限的用户进程(ctypes 读不出所有者)由后台 CIM GetOwner 批量补查记忆化,不能直接当非本用户过滤。
 6. **锚点批处理编码(1.1.0 发布当天)**:Python 开启 UTF-8 模式(uv 解释器)时 `locale.getpreferredencoding` 返回 UTF-8,而 cmd 解析 .cmd 永远走系统 ANSI 代码页——中文路径被读成乱码报 exit 9009。锚点批处理固定用 `mbcs` 写入。同理:`start.bat` 必须纯 ASCII + CRLF(cmd 按 ANSI 解析,.gitattributes 已强制 `.bat/.cmd` eol=crlf);非中文代码页系统上中文路径批处理 cmd 本身无法执行,产品按 errors=replace 降级。
+7. **系统目录淹没进程名(1.1.0 发布次日)**:开机自启/托盘应用的 cwd 几乎都是 `C:\Windows\System32`,服务表格主标题优先取「目录末段」,Ollama 等服务在表格/TOP5 里全叫「System32」,用户按名字搜不到。`project_name` 现把家目录与系统目录(`_GENERIC_PROJECT_NAMES`,大小写不敏感,含反斜杠结尾)判为无项目名,前端各展示位回退进程名;`project` 是纯展示字段,不影响启停/认领逻辑(那两处用的是完整 cwd 路径)。
+8. **符号链接测试在本地 Windows 报 WinError 1314**:非管理员且未开开发者模式时 `os.symlink` 被拒,CI 的 Windows runner 以管理员运行则可建。`tests/__init__.py` 的 `windows_symlink_available()` 统一探测,三个依赖符号链接的测试据此 skipIf,不算失败。
 
 ## 修改规范
 

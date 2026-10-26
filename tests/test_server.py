@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 import server
+from tests import windows_symlink_available as _windows_symlink_available
 
 
 class ParsingTests(unittest.TestCase):
@@ -19,6 +20,33 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(server.parse_etime("01:02:03"), 3723)
         self.assertEqual(server.parse_etime("2-01:02:03"), 176523)
         self.assertEqual(server.parse_etime("bad"), 0)
+
+    def test_project_name_generic_dirs_are_none(self):
+        """系统目录不是项目名：开机自启服务常驻 System32，作为主标题会淹没进程名"""
+        generic = [
+            "C:\\Windows\\System32",
+            "C:\\WINDOWS",                      # 大小写不敏感
+            "c:\\windows\\system32\\",          # 尾部分隔符
+            "C:\\Program Files",
+            "C:\\Program Files (x86)",
+            "C:\\ProgramData",
+            "/usr/local",                       # basename "local" 同样是噪声
+            "/Applications",
+            "C:\\",
+            "/",
+            server.HOME_DIR,                    # 家目录本身
+            "",
+            None,
+        ]
+        for cwd in generic:
+            self.assertIsNone(server.project_name(cwd), repr(cwd))
+
+    def test_project_name_real_dirs_are_kept(self):
+        self.assertEqual(server.project_name("/Users/x/xx项目"), "xx项目")
+        self.assertEqual(
+            server.project_name("C:\\Users\\me\\AppData\\Local\\Programs\\Ollama"),
+            "Ollama")
+        self.assertEqual(server.project_name("C:\\dev\\local-ops-win"), "local-ops-win")
 
     def test_validate_port(self):
         self.assertEqual(server.validate_port("8791"), (8791, None))
@@ -239,6 +267,9 @@ class AppHealthTests(unittest.TestCase):
         self.assertEqual(direct["issues"][0]["kind"], "script-not-executable")
         self.assertFalse(wrapped["blocking"])
 
+    @unittest.skipIf(
+        server.IS_WIN and not _windows_symlink_available(),
+        "Windows 非管理员/未开开发者模式时无法创建符号链接（CI 管理员环境可建）")
     def test_broken_script_symlink_is_unavailable(self):
         with tempfile.TemporaryDirectory() as td:
             link = os.path.join(td, "job.py")

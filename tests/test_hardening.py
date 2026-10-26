@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import server
+from tests import windows_symlink_available
 
 
 class HttpHarness:
@@ -594,6 +595,9 @@ class StaticFileServingTests(unittest.TestCase):
         status, _, _ = self.h.request("GET", "/icons/../../etc/passwd")
         self.assertEqual(status, 404)
 
+    @unittest.skipIf(
+        not windows_symlink_available(),
+        "Windows 非管理员/未开开发者模式时无法创建符号链接（CI 管理员环境可建）")
     def test_symlink_inside_static_cannot_escape_to_outside(self):
         with tempfile.TemporaryDirectory() as td:
             outside = os.path.join(td, "secret.txt")

@@ -1503,15 +1503,31 @@ def classify_group(key, name, comm, args, cwd, promoted):
 
 HOME_DIR = os.path.expanduser("~")
 
+# 这些目录只是“进程恰好从系统目录启动”的噪声，不是项目名。开机自启的
+# GUI/托盘应用（如 Ollama）常驻 C:\Windows\System32，若把 System32 当项目
+# 名展示，会淹没服务表格与 TOP5 里的真实进程名，统一视为无项目名
+_GENERIC_PROJECT_NAMES = {
+    "windows", "system32", "syswow64", "programdata", "program files",
+    "program files (x86)", "appdata", "local", "local low", "roaming",
+    "temp", "tmp", "bin", "sbin", "usr", "etc", "var", "lib", "lib64",
+    "applications", "library", "system", "private", "opt", "windowspowershell",
+}
+
 
 def project_name(cwd):
-    """从工作目录推断项目名（最后一段目录名），无有效 cwd 时返回 None。"""
+    """从工作目录推断项目名（最后一段目录名）；无有效 cwd、家目录或
+    系统目录（System32/WINDOWS 等）返回 None，让前端回退显示进程名。"""
     if not cwd:
         return None
-    cwd = cwd.rstrip("/")
-    if not cwd or cwd == "/" or cwd == HOME_DIR:
+    cwd = cwd.rstrip("/\\")
+    if not cwd or cwd in ("/", ""):
         return None
-    return os.path.basename(cwd) or None
+    if os.path.normcase(cwd) == os.path.normcase(HOME_DIR):
+        return None
+    base = os.path.basename(cwd)
+    if not base or base.lower() in _GENERIC_PROJECT_NAMES:
+        return None
+    return base
 
 
 # ---------------------------------------------------------------- 进程溯源
@@ -2052,6 +2068,7 @@ def build_state(cfg, console_port, config_health=None):
         "consolePort": console_port,
         "consolePid": SELF_PID,
         "consoleCwd": BASE_DIR,
+        "dataDir": DATA_DIR,
         "platform": sys.platform,
         "autostartInstalled": bool(IS_WIN and autostart_installed()),
         "version": APP_VERSION,

@@ -51,6 +51,7 @@
   }],
   "watchedKeywords": ["ffmpeg"],
   "consolePort": 9600, "consolePid": 123, "consoleCwd": "/path/to/总控台",
+  "dataDir": "/path/to/Application Support/总控台",
   "version": "1.0.0", "schemaVersion": 1,
   "degraded": false, "degradedReasons": []
 }
@@ -64,7 +65,7 @@
 - `attached`：用户从服务监控明确认领的外部服务身份。此类服务的监听子进程换 PID 后，可按配置端口 + 当前 UID + 真实 cwd 唯一重新关联；普通卡片仍不得仅凭端口自动认领
 - 服务行的 `key` 保持 `name:port` 以兼容隐藏/置顶配置；`instanceKey` 使用 `pid:port` 区分同名同端口后来出现的新进程实例，前端发现与 DOM 对账均使用它
 - `listening`：受控进程是否正在监听配置端口；`portOccupied`：该端口当前被不属于本卡片的进程占用；多张卡片允许保存同一个常见开发端口，`portConflict/portConflictApps` 仅为旧前端兼容字段并固定返回 `false/[]`；`legacyManaged`：是否通过旧版 PID+端口+UID+cwd 兼容身份识别
-- `project`：cwd 最后一段目录名（用于区分同名进程）；`appId`/`appName`：该端口命中启动台应用时的关联信息
+- `project`：cwd 最后一段目录名（用于区分同名进程）；家目录与系统目录（`System32`/`WINDOWS`/`Program Files` 等，见 `_GENERIC_PROJECT_NAMES`）返回 `null`，前端回退显示进程名——否则开机自启服务（cwd 常为 `C:\Windows\System32`）在表格/TOP5 里会被「System32」淹没；`appId`/`appName`：该端口命中启动台应用时的关联信息
 - 排除控制台自身进程；只返回当前用户的进程
 - **进程溯源**：`origin` 沿 PPID 链（≤12 层）识别启动者——跳过壳/包管理器/运行时包装层与 launchd，优先匹配已知 AI 编程助手（codex/claude/kimi/gemini/aider/opencode 等）、`.app` 包（VS Code/Cursor/iTerm/Warp 等）、tmux/screen 与总控台 run-token 标记（「总控台」）；未识别的中间层先记为候选、有更优答案即覆盖，全部落空才以最近未识别进程命名；`label` 为展示名、`icon` 取 bot/code/terminal/package/rocket/server，仅用于展示，不影响启停判定
 

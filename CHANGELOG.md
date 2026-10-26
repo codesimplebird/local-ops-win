@@ -8,6 +8,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **服务监控进程名被系统目录淹没**：开机自启/托盘应用（如 Ollama）的工作目录常是
+  `C:\Windows\System32`，此前表格主标题取「目录末段」，整列显示成 System32/WINDOWS，
+  用户按进程名找不到服务。现在家目录与系统目录（`System32`/`WINDOWS`/`Program Files`
+  等，见 `_GENERIC_PROJECT_NAMES`）不再作为项目名返回（`project=null`），表格、
+  TOP 5、端口发现提示与「加入启动台」预填名全部回退显示真实进程名。
+- 设置中心「数据目录」在 Windows 上硬编码显示 macOS 路径；`/api/state` 新增
+  `dataDir` 字段，按实际数据目录显示。
+
+### Changed
+
+- 依赖符号链接的测试在 Windows 非管理员/未开开发者模式环境显式跳过
+  （`tests.windows_symlink_available`，CI 管理员环境仍真实执行）。
+
 ## [1.1.0] - 2026-10-25
 
 ### Added

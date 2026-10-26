@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 import zipfile
 
+from tests import windows_symlink_available
 from tools import build_release as release
 from tools import check_project as project_check
 
@@ -56,6 +57,9 @@ class ReleaseFixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "敏感文件"):
                 release.iter_release_files()
 
+    @unittest.skipIf(
+        not windows_symlink_available(),
+        "Windows 非管理员/未开开发者模式时无法创建符号链接（CI 管理员环境可建）")
     def test_symlinked_required_source_is_rejected(self):
         target = self.write("target/server.py")
         (self.root / "server.py").symlink_to(target)
