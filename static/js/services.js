@@ -231,7 +231,8 @@ function createServiceRow(kind) {
   cPort.type = 'button';
   const cPortCell = el('span', 'c-port-cell');
   cPortCell.setAttribute('role', 'cell');
-  cPortCell.append(cPort);
+  const cPortExtras = el('span', 'c-port-extras');
+  cPortCell.append(cPort, cPortExtras);
   const cPid = el('span', 'c-pid');
   cPid.setAttribute('role', 'cell');
   const cCwd = el('span', 'c-cwd');
@@ -256,8 +257,8 @@ function createServiceRow(kind) {
   cmdRow.append(cmdCode);
 
   row.append(cDot, cTitle, cPid, cPortCell, cCwd, load.wrap, cUp, cStatus, cAct, cmdRow);
-  row._r = { name, mark, subText, subIcon, pid: cPid, port: cPort, cwd: cCwd,
-    ldCpu: load.cpu, ldMem: load.mem, ldCpuFill: load.cpuFill, up: cUp, cmdCode };
+  row._r = { name, mark, subText, subIcon, pid: cPid, port: cPort, portExtras: cPortExtras,
+    cwd: cCwd, ldCpu: load.cpu, ldMem: load.mem, ldCpuFill: load.cpuFill, up: cUp, cmdCode };
 
   const key = () => row.dataset.key;
   cPort.addEventListener('click', () => {
@@ -361,6 +362,26 @@ function updateServiceRow(row, svc) {
   } else {
     r.port.hidden = true;
     r.port.removeAttribute('aria-label');
+  }
+  /* 同一逻辑服务的其他监听端口（如 Ollama 的托盘内部口、模型临时口）：
+     次要小徽标展示，点击同样可打开；列表变化时才重建，避免每轮闪烁 */
+  const extras = Array.isArray(svc.extraPorts)
+    ? svc.extraPorts.filter(p => p !== svc.port) : [];
+  const extrasKey = extras.join(',');
+  if (r._extrasKey !== extrasKey) {
+    r._extrasKey = extrasKey;
+    setChildren(r.portExtras, ...extras.map(p => {
+      const chip = el('button', 'c-port c-port-extra');
+      chip.type = 'button';
+      setText(chip, ':' + p);
+      chip.title = '打开 ' + localServiceUrl(svc, p);
+      chip.setAttribute('aria-label', '打开 ' + title + '，端口 ' + p);
+      chip.addEventListener('click', () => {
+        const s = findSvc(row.dataset.key);
+        if (s) window.open(localServiceUrl(s, p), '_blank', 'noopener,noreferrer');
+      });
+      return chip;
+    }));
   }
   const full = svc.cwd || '';
   setText(r.cwd, full ? truncateMiddle(shortHome(full)) : '');

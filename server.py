@@ -1660,6 +1660,96 @@ def attribute_origin(pid, table):
     return candidate
 
 
+# ---------------------------------------------------------------- 服务家族合并
+# 一个逻辑服务常由「祖先后代链上的多个监听进程」组成：Ollama = 托盘
+# ollama app.exe（内部随机口）→ ollama.exe serve（API :11434）→
+# llama-server.exe（每个已加载模型的临时口，随加载/卸载出现和消失）。
+# 按 (pid, port) 逐行展示会把一个服务拆成几行，模型临时口还会反复挤进
+# TOP 5、触发端口发现提醒。此处把同家族监听进程合并为一行：主成员之外
+# 的端口并入主成员行的 extraPorts，不再单独成行。只认监听进程之间的
+# 直接父子链——同一终端里先后起的两个服务是兄弟关系，不会误合并。
+
+_SERVE_WORD_RE = re.compile(r"\bserve\b", re.I)
+_FAMILY_MAX_DEPTH = 16
+
+# 系统壳/会话宿主：它们自身可能监听（Explorer.EXE 有内部端口），而所有
+# 从开始菜单/桌面启动的 GUI 应用都是 Explorer 的后代——若把它们当家族
+# 锚点，Steam/WorkBuddy 等互不相干的服务会被并成一行。家族判定中这类
+# 进程透明穿透（不作为任何监听进程的祖先，自己保留独立行）。
+_FAMILY_SHELL_ANCHORS = {
+    "explorer.exe", "sihost.exe", "runtimebroker.exe", "svchost.exe",
+    "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+    "searchhost.exe", "widgets.exe", "taskhostw.exe", "ctfmon.exe",
+    "dwm.exe", "winlogon.exe", "userinit.exe",
+    "finder", "windowserver", "loginwindow", "launchd",
+}
+
+
+def _family_is_shell_anchor(args):
+    first = (args or "").split()[0].strip('"') if (args or "").split() else ""
+    return os.path.basename(first).casefold() in _FAMILY_SHELL_ANCHORS
+
+
+def listener_family_map(listener_pids, origin_table):
+    """把监听进程按「监听祖先链」分族，返回 {pid: 家族主成员 pid}。
+
+    主成员选取：命令行含独立 `serve` 单词（如 `ollama serve`，不匹配
+    server/llama-server）的成员优先（取最浅者），否则用家族最顶层的
+    监听进程（如 Docker Desktop 托盘）。系统壳监听进程（Explorer 等）
+    透明穿透，不参与家族。单成员家族映射到自身。"""
+    listeners = set(listener_pids)
+
+    def nearest_listener_ancestor(pid):
+        cur, seen = pid, set()
+        for _ in range(_FAMILY_MAX_DEPTH):
+            entry = origin_table.get(cur)
+            if not entry:
+                return None
+            ppid = entry[0]
+            if ppid <= 0 or ppid == pid or ppid in seen:
+                return None
+            if ppid in listeners:
+                parent_args = (origin_table.get(ppid) or (0, ""))[1] or ""
+                if not _family_is_shell_anchor(parent_args):
+                    return ppid
+            seen.add(ppid)
+            cur = ppid
+        return None
+
+    root_of, depth_of = {}, {}
+    for pid in listeners:
+        cur, seen, depth = pid, set(), 0
+        while True:
+            nxt = nearest_listener_ancestor(cur)
+            if nxt is None or nxt in seen:
+                break
+            seen.add(nxt)
+            cur = nxt
+            depth += 1
+        root_of[pid] = cur
+        depth_of[pid] = depth
+
+    families = {}
+    for pid in listeners:
+        families.setdefault(root_of[pid], []).append(pid)
+
+    result = {}
+    for root, members in families.items():
+        if len(members) == 1:
+            result[root] = root
+            continue
+        serve_members = [
+            m for m in members
+            if _SERVE_WORD_RE.search((origin_table.get(m) or (0, ""))[1] or "")]
+        if serve_members:
+            primary = min(serve_members, key=lambda m: (depth_of[m], m))
+        else:
+            primary = root
+        for m in members:
+            result[m] = primary
+    return result
+
+
 def build_services(cfg, groups=None):
     """返回 (services, listeners)。只含当前用户进程，排除控制台自身。"""
     listeners = scan_listeners()
@@ -1689,27 +1779,46 @@ def build_services(cfg, groups=None):
     app_by_pid = listener_app_owners(
         cfg.get("apps") or [], listeners, snap, cwds, groups)
 
+    # 家族合并 + 同进程多端口合并：每个逻辑服务（进程或监听进程家族）只
+    # 出一行，主端口之外的全部端口进 extraPorts（Ollama 的托盘内部口与
+    # 模型临时口、Steam 的多端口等不再各自成行）
+    family = listener_family_map(set(mine_pids), origin_table)
+    ports_by_pid = {}
+    for pid, port in listeners:
+        ports_by_pid.setdefault(pid, []).append(port)
+    family_extra = {}
+    primary_pids = []
+    for pid in dict.fromkeys(mine_pids):
+        primary = family.get(pid, pid)
+        if primary != pid:
+            family_extra.setdefault(primary, []).extend(
+                ports_by_pid.get(pid, []))
+        else:
+            primary_pids.append(pid)
+
     services = []
-    for pid, port in sorted(listeners, key=lambda x: (x[1], x[0])):
-        if pid == SELF_PID:
-            continue
-        info = snap.get(pid)
-        if not info or info.get("uid") != SELF_UID:
-            continue
-        if owner_allowed is not None and pid not in owner_allowed:
-            continue
+    for pid in sorted(primary_pids,
+                      key=lambda p: (min(ports_by_pid.get(p) or [0]), p)):
+        info = snap[pid]
+        port = min(ports_by_pid[pid])
         comm = info.get("comm") or ""
         args = info.get("args") or comm
         name = os.path.basename(comm) if comm else "?"
         key = "%s:%d" % (name, port)
         cwd = cwds.get(pid)
         app = app_by_pid.get(pid)
+        # 子进程可能与主成员共享同一监听端口（SO_REUSEADDR/句柄复制），
+        # 排除与主端口相同的项
         services.append({
             "key": key,
             # key 保持 name:port 以兼容既有隐藏/置顶配置；instanceKey 用于
             # 区分同名同端口在不同时间出现的新进程，以及极少数共享监听。
             "instanceKey": "%d:%d" % (pid, port),
             "pid": pid, "name": name, "port": port,
+            # 同一逻辑服务的其他监听端口（家族非主成员 + 本进程多余端口）
+            "extraPorts": sorted(
+                set(family_extra.get(pid, []) + ports_by_pid[pid][1:])
+                - {port}),
             "openHost": listener_open_host(listeners, port, {pid}),
             "cwd": cwd, "project": project_name(cwd), "cmd": args,
             "cpu": info["cpu"], "mem": info["mem"], "uptimeSec": info["etime"],
@@ -4831,15 +4940,52 @@ def _console_instance_match_token():
     return "server.py"
 
 
+def _console_argv_matches(args, token):
+    """命令行是否像总控台本体：python/py 解释器（或打包 exe）亲自运行
+    server.py。bash/cmd/PowerShell 等包装层的 argv 同样会出现 server.py
+    字样（脚本文本、-ArgumentList、uv shim 的等待进程），必须排除——否则
+    启动器会把自身启动链误判为“已有实例”，双击 start.bat 表现为只打开
+    一个页面后静默退出（“点了没反应”）。"""
+    if not args:
+        return False
+    argv0 = (args.split() or [""])[0].strip('"')
+    base = os.path.basename(argv0).casefold()
+    if FROZEN:
+        return base == token
+    if not (base.startswith("python") or base in ("py", "pyw")):
+        return False
+    return token in args.lower()
+
+
 def find_console_instances():
-    """查找从同一项目目录启动的总控台，用于双击启动器去重。"""
+    """查找从同一项目目录启动的总控台，用于双击启动器去重。
+
+    自身的启动链（uv/python shim、cmd/PowerShell 包装层）必须排除：
+    它们的 argv 同样含 server.py、cwd 同为项目目录，会被误判为“已有
+    实例”，导致 start.bat 只打开一个（可能连不上的）页面后静默退出，
+    表现为“双击没反应”。"""
+    # 沿 PPID 链收集自身祖先（≤10 层，防环）
+    own_chain = set()
+    origin = origin_snapshot()
+    cur = SELF_PID
+    for _ in range(10):
+        entry = origin.get(cur)
+        if not entry:
+            break
+        ppid = entry[0]
+        if ppid <= 0 or ppid in own_chain:
+            break
+        own_chain.add(ppid)
+        cur = ppid
+
     snap = ps_snapshot(None, with_uid=True)
     token = _console_instance_match_token()
     candidates = []
     for pid, info in snap.items():
         args = info.get("args") or ""
-        if (pid == SELF_PID or info.get("uid") != SELF_UID
-                or token not in args.lower()
+        if (pid == SELF_PID or pid in own_chain
+                or info.get("uid") != SELF_UID
+                or not _console_argv_matches(args, token)
                 or "--restart-helper" in args):
             continue
         candidates.append(pid)

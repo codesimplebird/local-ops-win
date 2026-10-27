@@ -631,6 +631,10 @@ body.dragging-on { cursor: grabbing; user-select: none; -webkit-user-select: non
 .c-port:hover { text-decoration: underline; }
 .c-port:empty { display: none; }
 
+/* 家族/同进程合并行的次要端口徽标：弱化显示，不与主端口抢注意力 */
+.c-port-extras { display: inline-flex; flex: none; flex-wrap: wrap; gap: 4px; margin-left: 6px; }
+.c-port.c-port-extra { color: var(--ink-4); font-weight: 600; padding: 2px 1px; }
+
 .c-cwd { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .c-load { display: flex; gap: 14px; }
 .ld { display: flex; gap: 5px; }

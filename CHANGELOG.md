@@ -8,8 +8,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **服务监控按「逻辑服务」合并展示**：多进程服务不再被拆成多行——Ollama 的
+  托盘内部口（随机端口）、`ollama serve` API（:11434）、模型运行器临时口
+  （随模型加载/卸载出现消失）合并为一行，主端口之外全部进 `extraPorts`
+  次要徽标（可点击打开）；同一进程的多个监听端口（如 Steam）同样合并。
+  家族判定只认监听进程间的直接父子链，同一终端起的兄弟服务不会误合并，
+  Explorer 等系统壳（自身监听、且是所有 GUI 应用的祖先）透明穿透不参与
+  分族；模型临时口不再挤占端口 TOP 5、不再反复触发端口发现提醒。
+
 ### Fixed
 
+- **双击 start.bat「没反应」的根因**：启动器的实例去重按「argv 含
+  server.py + cwd 为项目目录」匹配，会把启动链上的包装层误判为已有
+  实例——uv 的 python shim（`python server.py …` 等待子进程）、
+  bash/cmd/PowerShell（argv 以脚本文本或 `-ArgumentList` 携带
+  server.py 字样）都会命中，于是只打开一个页面就静默退出。现在候选
+  必须是 python/pyw/py 解释器（打包形态为 exe 名）亲自运行 server.py，
+  且排除自身 PPID 祖先链（`_console_argv_matches`）。
 - **服务监控进程名被系统目录淹没**：开机自启/托盘应用（如 Ollama）的工作目录常是
   `C:\Windows\System32`，此前表格主标题取「目录末段」，整列显示成 System32/WINDOWS，
   用户按进程名找不到服务。现在家目录与系统目录（`System32`/`WINDOWS`/`Program Files`

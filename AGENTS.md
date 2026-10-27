@@ -27,7 +27,7 @@
 {
   "services": [{
     "key": "python3.12:8791", "instanceKey": "54252:8791",
-    "pid": 54252, "name": "python3.12", "port": 8791,
+    "pid": 54252, "name": "python3.12", "port": 8791, "extraPorts": [],
     "cwd": "/Users/example/xx项目", "project": "xx项目", "cmd": "python3 app.py",
     "cpu": 0.3, "mem": 1.2, "uptimeSec": 7980,
     "group": "mine", "pinned": false, "hidden": false, "promoted": false,
@@ -64,6 +64,7 @@
 - `running`：仅表示存在通过本次启动 token、进程组与当前用户三重校验的受控进程；不再以“配置端口有任意监听者”作为运行依据
 - `attached`：用户从服务监控明确认领的外部服务身份。此类服务的监听子进程换 PID 后，可按配置端口 + 当前 UID + 真实 cwd 唯一重新关联；普通卡片仍不得仅凭端口自动认领
 - 服务行的 `key` 保持 `name:port` 以兼容隐藏/置顶配置；`instanceKey` 使用 `pid:port` 区分同名同端口后来出现的新进程实例，前端发现与 DOM 对账均使用它
+- **服务表按「逻辑服务」一行展示**：同一进程的多个监听端口合并为一行（主端口取最小端口，其余进 `extraPorts`）；祖先后代链上的多个监听进程合并为「家族」一行（Ollama 托盘内部口 → `ollama serve` API → llama-server 模型临时口合为一行），家族主成员优先取命令行含独立 `serve` 单词（`\bserve\b`，不匹配 server）的最浅成员，否则取家族最顶层监听进程（如 Docker Desktop 托盘）。家族判定只认监听进程之间的直接父子链（`listener_family_map`，复用 `origin_snapshot` 的 PPID 表，零新增系统调用）——同一终端里先后起的两个服务是兄弟关系，不会误合并；Explorer 等系统壳（自身监听、且是所有 GUI 应用的祖先，见 `_FAMILY_SHELL_ANCHORS`）透明穿透，不参与分族。非主成员端口并入主成员行的 `extraPorts`，不再单独成行
 - `listening`：受控进程是否正在监听配置端口；`portOccupied`：该端口当前被不属于本卡片的进程占用；多张卡片允许保存同一个常见开发端口，`portConflict/portConflictApps` 仅为旧前端兼容字段并固定返回 `false/[]`；`legacyManaged`：是否通过旧版 PID+端口+UID+cwd 兼容身份识别
 - `project`：cwd 最后一段目录名（用于区分同名进程）；家目录与系统目录（`System32`/`WINDOWS`/`Program Files` 等，见 `_GENERIC_PROJECT_NAMES`）返回 `null`，前端回退显示进程名——否则开机自启服务（cwd 常为 `C:\Windows\System32`）在表格/TOP5 里会被「System32」淹没；`appId`/`appName`：该端口命中启动台应用时的关联信息
 - 排除控制台自身进程；只返回当前用户的进程

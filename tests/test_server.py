@@ -951,6 +951,68 @@ class LaunchEnvironmentTests(unittest.TestCase):
         self.assertIn("node: No such file", message)
 
 
+class ListenerFamilyTests(unittest.TestCase):
+    """监听进程家族合并：Ollama = 托盘(内部口) → serve(API) → 模型运行器(临时口)。"""
+
+    @staticmethod
+    def _table(edges, args=None):
+        args = args or {}
+        table = {pid: (ppid, args.get(pid, "")) for pid, ppid in edges.items()}
+        table.setdefault(1, (0, "launchd"))
+        return table
+
+    def test_ollama_chain_merges_to_serve_member(self):
+        table = self._table(
+            {10: 1, 100: 10, 200: 100, 300: 200},
+            {100: r"C:\Ollama\ollama app.exe",
+             200: r"C:\Ollama\ollama.exe serve",
+             300: r"C:\Ollama\lib\ollama\llama-server.exe --model x"})
+        fam = server.listener_family_map({100, 200, 300}, table)
+        self.assertEqual(fam, {100: 200, 200: 200, 300: 200})
+
+    def test_sibling_listeners_do_not_merge(self):
+        table = self._table(
+            {10: 1, 200: 10, 300: 10},
+            {200: "python app.py", 300: "node server.js"})
+        fam = server.listener_family_map({200, 300}, table)
+        self.assertEqual(fam, {200: 200, 300: 300})
+
+    def test_no_serve_word_falls_back_to_family_root(self):
+        table = self._table(
+            {10: 1, 100: 10, 200: 100},
+            {100: r"C:\Docker\Docker Desktop.exe",
+             200: r"C:\Docker\com.docker.backend.exe"})
+        fam = server.listener_family_map({100, 200}, table)
+        self.assertEqual(fam, {100: 100, 200: 100})
+
+    def test_server_word_is_not_serve(self):
+        table = self._table(
+            {10: 1, 100: 10, 300: 100},
+            {100: "supervisor.exe", 300: "llama-server.exe --model x"})
+        fam = server.listener_family_map({100, 300}, table)
+        # llama-server 不含独立 serve 单词（server ≠ serve），回退家族根
+        self.assertEqual(fam, {100: 100, 300: 100})
+
+    def test_ppid_cycle_is_safe(self):
+        table = self._table({100: 300, 300: 100})
+        fam = server.listener_family_map({100, 300}, table)
+        self.assertIn(fam[100], (100, 300))
+        self.assertIn(fam[300], (100, 300))
+
+    def test_single_listener_maps_to_self(self):
+        fam = server.listener_family_map({123}, self._table({123: 1}))
+        self.assertEqual(fam, {123: 123})
+
+    def test_shell_anchor_does_not_swallow_descendants(self):
+        """Explorer 等系统壳监听时，从开始菜单启动的互不相干服务不能并族。"""
+        table = self._table(
+            {1: 0, 50: 1, 100: 50, 200: 50},
+            {50: r"C:\WINDOWS\Explorer.EXE", 100: "steam.exe",
+             200: "WorkBuddy.exe"})
+        fam = server.listener_family_map({50, 100, 200}, table)
+        self.assertEqual(fam, {50: 50, 100: 100, 200: 200})
+
+
 class StateTests(unittest.TestCase):
     def test_app_and_service_expose_ipv6_aware_open_host(self):
         app = {**server.Config.APP_DEFAULT, "id": "vite", "name": "公众号排版",
@@ -974,6 +1036,46 @@ class StateTests(unittest.TestCase):
 
         self.assertEqual(service["openHost"], "localhost")
         self.assertEqual(built_app["openHosts"], {"5173": "localhost"})
+
+    def test_listener_family_and_multi_port_collapse_into_one_row(self):
+        """Ollama 三进程链 + 同进程多端口都只出一行，多余端口进 extraPorts。"""
+        listener = {
+            100: {"uid": server.SELF_UID, "comm": "C:\\Ollama\\ollama app.exe",
+                  "args": "ollama app.exe", "cpu": 0.0, "mem": 0.1, "etime": 10},
+            200: {"uid": server.SELF_UID, "comm": "C:\\Ollama\\ollama.exe",
+                  "args": "ollama.exe serve", "cpu": 0.1, "mem": 0.2, "etime": 10},
+            300: {"uid": server.SELF_UID, "comm": "C:\\Ollama\\llama-server.exe",
+                  "args": "llama-server.exe --model x", "cpu": 3.2, "mem": 8.0,
+                  "etime": 2},
+            400: {"uid": server.SELF_UID, "comm": "/usr/bin/steam",
+                  "args": "steam", "cpu": 0.0, "mem": 0.4, "etime": 30},
+            500: {"uid": server.SELF_UID, "comm": "/usr/bin/steamwebhelper",
+                  "args": "steamwebhelper", "cpu": 0.0, "mem": 0.2, "etime": 30},
+        }
+        origin = {1: (0, "launchd"), 10: (1, "cmd.exe"),
+                  100: (10, "ollama app.exe"), 200: (100, "ollama.exe serve"),
+                  300: (200, "llama-server.exe --model x"), 400: (10, "steam"),
+                  500: (400, "steamwebhelper")}
+        with mock.patch.object(server, "scan_listeners",
+                               return_value={(100, 11044), (200, 11434),
+                                             (300, 7595), (400, 12949),
+                                             (400, 27036), (500, 12949)}), \
+                mock.patch.object(server, "ps_snapshot", return_value=listener), \
+                mock.patch.object(server, "lsof_cwds", return_value={}), \
+                mock.patch.object(server, "origin_snapshot", return_value=origin), \
+                mock.patch.object(
+                    server, "managed_process_index",
+                    return_value=({}, {}, {})):
+            services, _ = server.build_services({"apps": []})
+
+        rows = [(s["name"], s["port"]) for s in services]
+        # ollama 家族三进程 → ollama.exe(:11434) 一行；steam 及其共享端口的
+        # 子进程 → 一行，且与主端口相同的共享端口不重复出现在 extraPorts
+        self.assertEqual(rows, [("ollama.exe", 11434), ("steam", 12949)])
+        self.assertEqual(services[0]["pid"], 200)
+        self.assertEqual(services[0]["extraPorts"], [7595, 11044])
+        self.assertEqual(services[1]["extraPorts"], [27036])
+        self.assertEqual(services[0]["instanceKey"], "200:11434")
 
     def test_service_listener_is_linked_by_managed_identity_not_configured_port(self):
         app = {**server.Config.APP_DEFAULT, "id": "old-card",
@@ -1169,6 +1271,7 @@ class ConsoleRestartTests(unittest.TestCase):
                     "etime": 40},
         }
         with mock.patch.object(server, "ps_snapshot", return_value=snap), \
+                mock.patch.object(server, "origin_snapshot", return_value={}), \
                 mock.patch.object(server, "lsof_cwds", return_value={
                     71001: server.BASE_DIR,
                     71002: "/tmp/different-project",
@@ -1180,6 +1283,57 @@ class ConsoleRestartTests(unittest.TestCase):
         self.assertEqual([item["pid"] for item in found], [71001, 71004])
         self.assertEqual(found[0]["ports"], [9600])
         self.assertEqual(found[1]["ports"], [9601])
+
+    def test_instance_discovery_ignores_own_launch_chain(self):
+        """自身启动链（uv shim / cmd / PowerShell 包装层）的 argv 同样含
+        server.py、cwd 相同，不得被当成“已有实例”，否则 start.bat 双击后
+        只打开页面就静默退出（“点了没反应”）。"""
+        snap = {
+            100: {"uid": server.SELF_UID, "args": "python server.py --launcher",
+                  "etime": 10},
+            71005: {"uid": server.SELF_UID,
+                    "args": "C:/py/python.exe server.py --launcher --no-browser",
+                    "etime": 1},
+            71006: {"uid": server.SELF_UID, "args": "python3 server.py",
+                    "etime": 20},
+        }
+        origin = {71005: (100, "python server.py"), 100: (10, "cmd.exe"),
+                  10: (1, "explorer.exe")}
+        with mock.patch.object(server, "SELF_PID", 71005), \
+                mock.patch.object(server, "ps_snapshot", return_value=snap), \
+                mock.patch.object(server, "origin_snapshot", return_value=origin), \
+                mock.patch.object(server, "lsof_cwds", return_value={
+                    100: server.BASE_DIR, 71006: server.BASE_DIR}), \
+                mock.patch.object(server, "scan_listeners",
+                                  return_value={(71006, 9600)}):
+            found = server.find_console_instances()
+        self.assertEqual([item["pid"] for item in found], [71006])
+
+    def test_instance_discovery_ignores_wrapper_argv(self):
+        """bash/PowerShell 等包装层的 argv 会以脚本文本/-ArgumentList 形式
+        携带 server.py 字样，且 cwd 可能同为项目目录——解释器本身不是
+        python，不得判为实例。"""
+        snap = {
+            200: {"uid": server.SELF_UID,
+                  "args": 'bash -c "cd /c/dev && python server.py --launcher"',
+                  "etime": 5},
+            201: {"uid": server.SELF_UID,
+                  "args": "powershell -Command Start-Process -ArgumentList 'server.py'",
+                  "etime": 5},
+            202: {"uid": server.SELF_UID, "args": "notepad server.py",
+                  "etime": 5},
+            71007: {"uid": server.SELF_UID, "args": "python3 server.py",
+                    "etime": 20},
+        }
+        cwds = {200: server.BASE_DIR, 201: server.BASE_DIR,
+                202: server.BASE_DIR, 71007: server.BASE_DIR}
+        with mock.patch.object(server, "ps_snapshot", return_value=snap), \
+                mock.patch.object(server, "origin_snapshot", return_value={}), \
+                mock.patch.object(server, "lsof_cwds", return_value=cwds), \
+                mock.patch.object(server, "scan_listeners",
+                                  return_value={(71007, 9600)}):
+            found = server.find_console_instances()
+        self.assertEqual([item["pid"] for item in found], [71007])
 
     def test_panel_restart_spawns_helper_before_shutdown(self):
         class FakeServer:

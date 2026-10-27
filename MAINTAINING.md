@@ -61,6 +61,8 @@ git merge origin/main
 6. **锚点批处理编码(1.1.0 发布当天)**:Python 开启 UTF-8 模式(uv 解释器)时 `locale.getpreferredencoding` 返回 UTF-8,而 cmd 解析 .cmd 永远走系统 ANSI 代码页——中文路径被读成乱码报 exit 9009。锚点批处理固定用 `mbcs` 写入。同理:`start.bat` 必须纯 ASCII + CRLF(cmd 按 ANSI 解析,.gitattributes 已强制 `.bat/.cmd` eol=crlf);非中文代码页系统上中文路径批处理 cmd 本身无法执行,产品按 errors=replace 降级。
 7. **系统目录淹没进程名(1.1.0 发布次日)**:开机自启/托盘应用的 cwd 几乎都是 `C:\Windows\System32`,服务表格主标题优先取「目录末段」,Ollama 等服务在表格/TOP5 里全叫「System32」,用户按名字搜不到。`project_name` 现把家目录与系统目录(`_GENERIC_PROJECT_NAMES`,大小写不敏感,含反斜杠结尾)判为无项目名,前端各展示位回退进程名;`project` 是纯展示字段,不影响启停/认领逻辑(那两处用的是完整 cwd 路径)。
 8. **符号链接测试在本地 Windows 报 WinError 1314**:非管理员且未开开发者模式时 `os.symlink` 被拒,CI 的 Windows runner 以管理员运行则可建。`tests/__init__.py` 的 `windows_symlink_available()` 统一探测,三个依赖符号链接的测试据此 skipIf,不算失败。
+9. **启动器幽灵实例(1.1.0 发布次日)**:`find_console_instances` 按「argv 含 server.py + cwd 为项目目录」匹配,启动链上的包装层全部命中——uv 的 python shim(argv 就是 `python server.py …`,等待子进程期间一直活着)、bash/cmd/PowerShell(argv 以脚本文本或 -ArgumentList 形式携带 server.py 字样)——于是 `--launcher` 判定"已有实例",打开一个页面后静默退出,表现为**双击 start.bat 没反应**。修复双保险:`_console_argv_matches` 要求解释器本身(python*/py/pyw,打包形态为 exe 名)亲自运行 server.py;再排除自身 PPID 祖先链(≤10 层,祖先已退出时靠自身 ppid 仍可走一段)。调试此问题时的教训:PowerShell 的 CIM CreationDate 是本地时间;`win<NNNNNN>.log` 是**应用**日志不是总控台启动日志,别看错文件。
+10. **监听家族合并的两个陷阱(同日)**:①Explorer.EXE 自身监听内部端口,而所有从开始菜单/桌面启动的应用都是它的后代——若不把系统壳(见 `_FAMILY_SHELL_ANCHORS`)在家族判定中透明穿透,Steam/WorkBuddy 等互不相干的服务会被并成一行(实测 12 个服务被吞);②子进程可与主成员共享同一监听端口(句柄复制,如 steamwebhelper),`extraPorts` 必须排除与主端口相同的项,否则主端口重复出现。
 
 ## 修改规范
 
