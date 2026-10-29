@@ -48,6 +48,14 @@ class ParsingTests(unittest.TestCase):
             "Ollama")
         self.assertEqual(server.project_name("C:\\dev\\local-ops-win"), "local-ops-win")
 
+    def test_run_cmd_uses_no_window_flag_for_hidden_children(self):
+        """无控制台父进程（pythonw/开机自启/打包 --noconsole）派生控制台
+        子进程必须带 CREATE_NO_WINDOW，否则每次轮询弹一个 cmd 黑框。"""
+        with mock.patch.object(server.subprocess, "run") as run:
+            server.run_cmd(["netstat", "-ano"])
+        self.assertEqual(run.call_args.kwargs.get("creationflags"),
+                         server.CREATE_NO_WINDOW)
+
     def test_validate_port(self):
         self.assertEqual(server.validate_port("8791"), (8791, None))
         self.assertEqual(server.validate_port(None), (None, None))
@@ -1141,6 +1149,39 @@ class StateTests(unittest.TestCase):
         with mock.patch.object(server, "ps_snapshot", return_value=proc), \
                 mock.patch.object(server, "lsof_cwds", return_value={999: "/tmp/other"}):
             self.assertIsNone(server.legacy_managed_pid(app, {(999, 8080)}))
+
+    def test_attached_card_reassociates_when_cwd_drifts_to_generic_dir(self):
+        """Ollama 类系统服务的进程 cwd 在 System32 与安装目录间漂移，
+        attached 卡片按端口 + UID 唯一命中即可自动回到运行状态。"""
+        app = {**server.Config.APP_DEFAULT, "id": "ollama", "name": "Ollama",
+               "command": "ollama serve", "cwd": r"C:\Programs\Ollama",
+               "port": 11434, "attached": True}
+        proc = {555: {"uid": server.SELF_UID, "comm": r"C:\Ollama\ollama.exe",
+                      "args": "ollama.exe serve", "etime": 42}}
+        with mock.patch.object(server, "ps_snapshot", return_value=proc), \
+                mock.patch.object(server, "lsof_cwds",
+                                  return_value={555: r"C:\Windows\System32"}):
+            self.assertEqual(
+                server.legacy_managed_pid(app, {(555, 11434)}), 555)
+
+    def test_attached_card_still_requires_cwd_match_between_real_projects(self):
+        """卡片与进程两侧都是有项目身份的目录时不相等即拒绝——防止同端
+        口的另一个项目被误认领。"""
+        app = {**server.Config.APP_DEFAULT, "id": "vite", "name": "前端",
+               "command": "npm run dev", "cwd": "/tmp/projA", "port": 3000,
+               "attached": True}
+        proc = {556: {"uid": server.SELF_UID, "comm": "/usr/bin/node",
+                      "args": "node vite", "etime": 42}}
+        with mock.patch.object(server, "ps_snapshot", return_value=proc), \
+                mock.patch.object(server, "lsof_cwds",
+                                  return_value={556: "/tmp/projB"}):
+            self.assertIsNone(
+                server.legacy_managed_pid(app, {(556, 3000)}))
+        with mock.patch.object(server, "ps_snapshot", return_value=proc), \
+                mock.patch.object(server, "lsof_cwds",
+                                  return_value={556: "/tmp/projA"}):
+            self.assertEqual(
+                server.legacy_managed_pid(app, {(556, 3000)}), 556)
 
     def test_foreign_listener_is_conflict_not_running(self):
         app = {**server.Config.APP_DEFAULT, "id": "a", "name": "A",

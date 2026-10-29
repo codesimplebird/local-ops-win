@@ -672,11 +672,18 @@ def release_instance_lock(lock_file):
 
 # ---------------------------------------------------------------- 子进程与解析
 
+# 无控制台父进程（pythonw / 开机自启 / 打包 --noconsole）派生控制台子进程
+# 时，Windows 会为每个子进程新建可见控制台窗口——轮询每 2 秒一个黑框。
+# CREATE_NO_WINDOW 让子进程运行在不可见控制台（POSIX 上取 0，无副作用）。
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def run_cmd(args, timeout=SUBPROCESS_TIMEOUT):
     """运行命令并返回 stdout；任何异常/超时都返回空串，绝不上抛。"""
     try:
         r = subprocess.run(args, capture_output=True, text=True,
-                           errors="replace", timeout=timeout)
+                           errors="replace", timeout=timeout,
+                           creationflags=CREATE_NO_WINDOW)
         return r.stdout or ""
     except Exception:
         LOG.exception("命令执行失败: %r", args)
@@ -700,7 +707,8 @@ def _win_powershell(script, timeout=SUBPROCESS_TIMEOUT):
             ["powershell", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command",
              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + script],
-            capture_output=True, timeout=timeout)
+            capture_output=True, timeout=timeout,
+            creationflags=CREATE_NO_WINDOW)
         return r.stdout.decode("utf-8", errors="replace") or ""
     except Exception:
         LOG.exception("PowerShell 执行失败")
@@ -1172,7 +1180,8 @@ def _win_taskkill(pid, tree=True, force=False):
     args += ["/PID", str(int(pid))]
     try:
         r = subprocess.run(args, capture_output=True, text=True,
-                           errors="replace", timeout=SUBPROCESS_TIMEOUT)
+                           errors="replace", timeout=SUBPROCESS_TIMEOUT,
+                           creationflags=CREATE_NO_WINDOW)
     except Exception as e:
         return False, "taskkill 失败: %s" % e
     if r.returncode == 0:
@@ -1964,8 +1973,10 @@ def legacy_managed_pid(app, listeners=None, snap=None, cwds=None):
     """识别升级前身份或用户明确认领的外部监听进程。
 
     普通旧数据仍只接受原 lastPid。明确 ``attached`` 的卡片允许监听子进程
-    换 PID，但仍必须在配置端口上按当前 UID + 真实 cwd 唯一命中；因此
-    Next/Vite 等重建子进程后不会丢失关联，也不会只凭端口误认其他项目。
+    换 PID，在配置端口上按当前 UID 唯一命中；cwd 只在卡片与进程两侧都是
+    有项目身份的目录时才要求相等——因此 Next/Vite 等重建子进程后不会丢失
+    关联，也不会只凭端口误认其他项目，而 Ollama 这类 cwd 在系统目录与
+    安装目录间漂移的服务重启后仍能自动回到卡片上。
     """
     if app.get("runToken"):
         return None
@@ -1995,6 +2006,23 @@ def legacy_managed_pid(app, listeners=None, snap=None, cwds=None):
             continue
         actual_cwd = cwds.get(pid)
         if not actual_cwd:
+            continue
+        if app.get("attached"):
+            # cwd 只在「两侧都是有项目身份的目录」时才作为身份约束：
+            # Ollama 这类系统服务的进程 cwd 随启动方式漂移（System32 与
+            # 安装目录来回变），严格相等会让卡片在服务每次重启后掉线；
+            # 一侧是系统目录/家目录（project_name 为 None，无身份）时按
+            # 端口 + 当前 UID 唯一命中即可。两侧都是真实项目目录时仍须
+            # 相等，防止同端口的另一个项目被误认领。
+            if (project_name(expected_cwd) is not None
+                    and project_name(actual_cwd) is not None):
+                try:
+                    if (os.path.realpath(actual_cwd)
+                            != os.path.realpath(expected_cwd)):
+                        continue
+                except OSError:
+                    continue
+            matches.append(pid)
             continue
         try:
             same_cwd = (
@@ -2477,7 +2505,7 @@ def _start_app_windows(app, cwd, logf, env, marker, token):
         proc = subprocess.Popen(
             _win_anchor_argv(marker, app["command"]),
             cwd=cwd, stdout=logf, stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=CREATE_NO_WINDOW,
             env=env)
     except Exception as e:
         logf.close()
@@ -2621,7 +2649,8 @@ def _pick_path_windows(what):
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command", script],
-            capture_output=True, text=True, errors="replace", timeout=180)
+            capture_output=True, text=True, errors="replace", timeout=180,
+            creationflags=CREATE_NO_WINDOW)
     except Exception:
         return None, False
     if r.returncode != 0:
@@ -5127,7 +5156,8 @@ def schedule_console_restart(server, preferred_port):
     helper = subprocess.Popen(
         _console_program_args(["--restart-helper",
                                str(SELF_PID), str(int(preferred_port))]),
-        cwd=BASE_DIR, start_new_session=True, close_fds=True)
+        cwd=BASE_DIR, start_new_session=True, close_fds=True,
+        creationflags=CREATE_NO_WINDOW if IS_WIN else 0)
 
     def _shutdown():
         time.sleep(0.25)
@@ -5188,7 +5218,8 @@ def _run_powershell_checked(script):
             ["powershell", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command",
              "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + script],
-            capture_output=True, timeout=SUBPROCESS_TIMEOUT)
+            capture_output=True, timeout=SUBPROCESS_TIMEOUT,
+            creationflags=CREATE_NO_WINDOW)
         return r.returncode == 0, r.stderr.decode("utf-8", errors="replace")
     except Exception as e:
         return False, str(e)

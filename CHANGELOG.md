@@ -23,6 +23,10 @@
 
 ### Fixed
 
+- **pythonw/开机自启形态下 cmd 黑框连环闪**：无控制台父进程派生的
+  netstat/PowerShell 子进程每次轮询各弹一个可见 cmd 窗口（每 2 秒一个）。
+  所有 Windows 子进程调用补上 `CREATE_NO_WINDOW`（轮询、taskkill、文件
+  选择框、restart-helper、自启快捷方式操作），并加防回归测试。
 - **双击 start.bat「没反应」的根因**：启动器的实例去重按「argv 含
   server.py + cwd 为项目目录」匹配，会把启动链上的包装层误判为已有
   实例——uv 的 python shim（`python server.py …` 等待子进程）、
