@@ -10,6 +10,9 @@
 
 ### Added
 
+- **常用服务模板扩容**：新增 Clash（API 外部控制器 :9090）、vLLM、LM Studio、
+  Stable Diffusion WebUI、ComfyUI、Elasticsearch、Meilisearch、RabbitMQ、
+  ClickHouse、Jupyter Lab、Gitea、n8n、Aria2 共 13 个预置，搜索点选即填入。
 - **服务监控按「逻辑服务」合并展示**：多进程服务不再被拆成多行——Ollama 的
   托盘内部口（随机端口）、`ollama serve` API（:11434）、模型运行器临时口
   （随模型加载/卸载出现消失）合并为一行，主端口之外全部进 `extraPorts`
